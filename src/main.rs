@@ -1,10 +1,185 @@
-use ratatui::Terminal;
-use crossterm::terminal::{enable_raw_mode, disable_raw_mode};
-use serde::{Serialize, Deserialize};
-use clap::Parser;
-use anyhow::Result;
+use std::io;
+use std::time::{Duration, Instant};
 
-fn main() -> Result<()> {
-    println!("Dependencies are wired up correctly.");
+use crossterm::{
+    event::{self, Event, KeyCode, KeyEventKind},
+    execute,
+    terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
+};
+use ratatui::{
+    backend::CrosstermBackend,
+    layout::{Constraint, Direction, Layout},
+    text::{Line, Text},
+    widgets::{Block, Borders, Paragraph},
+    Terminal,
+};
+
+#[derive(Debug, Clone)]
+struct GpuMetrics {
+    name: String,
+    temperature_c: Option<f32>,
+    utilization_pct: Option<f32>,
+    vram_used_mb: Option<u32>,
+    vram_total_mb: Option<u32>,
+    power_w: Option<f32>,
+    fan_rpm: Option<u32>,
+    timestamp: Instant,
+}
+
+fn fmt_opt<T: std::fmt::Display>(v: &Option<T>) -> String {
+    v.as_ref().map(|x| x.to_string()).unwrap_or_else(|| "--".into())
+}
+
+fn fmt_vram(used: Option<u32>, total: Option<u32>) -> String {
+    match (used, total) {
+        (Some(u), Some(t)) => format!("{u} / {t} MB"),
+        (Some(u), None) => format!("{u} MB / ?"),
+        _ => "--".into(),
+    }
+}
+
+/// Fake sampler for macOS/dev. Later you’ll replace this with:
+/// - AMD sysfs reader, OR
+/// - rocm-smi JSON parser, OR
+/// - Intel backend, etc.
+fn sample_fake(counter: u64) -> Vec<GpuMetrics> {
+    // Give it a little “motion” so you can see updates.
+    let temp = 45.0 + ((counter % 30) as f32) * 0.3;      // ~45–54C
+    let util = (counter % 100) as f32;                    // 0–99%
+    let used = 1200 + (counter as u32 % 800);             // 1200–1999 MB
+    let total = 16_384;
+
+    vec![GpuMetrics {
+        name: "AMD Radeon (mock)".to_string(),
+        temperature_c: Some(temp),
+        utilization_pct: Some(util),
+        vram_used_mb: Some(used),
+        vram_total_mb: Some(total),
+        power_w: Some(90.0 + (counter % 20) as f32),
+        fan_rpm: Some(1200 + (counter as u32 % 400)),
+        timestamp: Instant::now(),
+    }]
+}
+
+struct App {
+    running: bool,
+    tick: u64,
+    metrics: Vec<GpuMetrics>,
+}
+
+impl App {
+    fn new() -> Self {
+        Self {
+            running: true,
+            tick: 0,
+            metrics: vec![],
+        }
+    }
+
+    fn on_tick(&mut self) {
+        self.metrics = sample_fake(self.tick);
+        self.tick += 1;
+    }
+
+    fn on_key(&mut self, code: KeyCode) {
+        match code {
+            KeyCode::Char('q') | KeyCode::Esc => self.running = false,
+            _ => {}
+        }
+    }
+}
+
+fn main() -> io::Result<()> {
+    enable_raw_mode()?;
+    let mut stdout = io::stdout();
+    execute!(stdout, EnterAlternateScreen)?;
+    let backend = CrosstermBackend::new(stdout);
+    let mut terminal = Terminal::new(backend)?;
+
+    let res = run_app(&mut terminal);
+
+    disable_raw_mode()?;
+    execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
+    terminal.show_cursor()?;
+
+    res
+}
+
+fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> io::Result<()> {
+    let mut app = App::new();
+    let tick_rate = Duration::from_millis(500);
+
+    // Force first tick so UI isn’t empty
+    app.on_tick();
+
+    while app.running {
+        terminal.draw(|f| ui(f, &app))?;
+
+        // Input (non-blocking with timeout)
+        if event::poll(tick_rate)? {
+            if let Event::Key(key) = event::read()? {
+                if key.kind == KeyEventKind::Press {
+                    app.on_key(key.code);
+                }
+            }
+        } else {
+            // Timeout hit => "tick"
+            app.on_tick();
+        }
+    }
+
     Ok(())
+}
+
+fn ui(f: &mut ratatui::Frame, app: &App) {
+    let size = f.size();
+
+    let layout = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Length(3), Constraint::Min(0), Constraint::Length(3)])
+        .split(size);
+
+    let header = Paragraph::new("gtop — mock metrics mode (MacBook) — q to quit")
+        .block(Block::default().borders(Borders::ALL).title("Header"));
+    f.render_widget(header, layout[0]);
+
+    let main = Block::default().borders(Borders::ALL).title("GPU Metrics");
+    f.render_widget(main.clone(), layout[1]);
+
+    // Inner area inside the main block
+    let inner = main.inner(layout[1]);
+
+    let mut lines: Vec<Line> = vec![];
+
+    for (i, gpu) in app.metrics.iter().enumerate() {
+        if i > 0 {
+            lines.push(Line::from("")); // blank line between GPUs
+        }
+
+        lines.push(Line::from(format!("GPU {i}: {}", gpu.name)));
+        lines.push(Line::from(format!(
+            "Temp: {} °C",
+            gpu.temperature_c.map(|t| format!("{t:.1}")).unwrap_or("--".into())
+        )));
+        lines.push(Line::from(format!(
+            "Util: {} %",
+            gpu.utilization_pct.map(|u| format!("{u:.0}")).unwrap_or("--".into())
+        )));
+        lines.push(Line::from(format!(
+            "VRAM: {}",
+            fmt_vram(gpu.vram_used_mb, gpu.vram_total_mb)
+        )));
+        lines.push(Line::from(format!(
+            "Power: {} W",
+            gpu.power_w.map(|p| format!("{p:.0}")).unwrap_or("--".into())
+        )));
+        lines.push(Line::from(format!("Fan: {} RPM", fmt_opt(&gpu.fan_rpm))));
+    }
+
+    let body = Paragraph::new(Text::from(lines));
+    f.render_widget(body, inner);
+
+    let footer = Paragraph::new(format!("Tick: {}   (data is mocked)", app.tick))
+        .block(Block::default().borders(Borders::ALL).title("Footer"));
+    f.render_widget(footer, layout[2]);
 }
