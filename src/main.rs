@@ -10,7 +10,7 @@ use ratatui::{
     backend::CrosstermBackend,
     layout::{Constraint, Direction, Layout},
     text::{Line, Text},
-    widgets::{Block, Borders, Paragraph},
+    widgets::{Block, Borders, Paragraph, Gauge},
     Terminal,
 };
 
@@ -37,6 +37,19 @@ fn fmt_vram(used: Option<u32>, total: Option<u32>) -> String {
         _ => "--".into(),
     }
 }
+
+fn vram_ratio(used: Option<u32>, total: Option<u32>) -> f64 {
+    match (used, total) {
+        (Some(u), Some(t)) if t > 0 => (u as f64 / t as f64).clamp(0.0, 1.0),
+        _ => 0.0,
+    }
+}
+
+fn pct_ratio(pct: Option<f32>) -> f64 {
+    pct.map(|p| (p.clamp(0.0, 100.0) as f64) / 100.0).unwrap_or(0.0)
+}
+
+
 
 /// Fake sampler for macOS/dev. Later you’ll replace this with:
 /// - AMD sysfs reader, OR
@@ -149,35 +162,84 @@ fn ui(f: &mut ratatui::Frame, app: &App) {
     // Inner area inside the main block
     let inner = main.inner(layout[1]);
 
-    let mut lines: Vec<Line> = vec![];
+    // Split the main inner area into:
+// - a text area
+// - a small gauge area at the bottom
+let inner_chunks = Layout::default()
+    .direction(Direction::Vertical)
+    .constraints([Constraint::Min(0), Constraint::Length(3), Constraint::Length(3)])
+    .split(inner);
 
-    for (i, gpu) in app.metrics.iter().enumerate() {
-        if i > 0 {
-            lines.push(Line::from("")); // blank line between GPUs
-        }
 
-        lines.push(Line::from(format!("GPU {i}: {}", gpu.name)));
-        lines.push(Line::from(format!(
-            "Temp: {} °C",
-            gpu.temperature_c.map(|t| format!("{t:.1}")).unwrap_or("--".into())
-        )));
-        lines.push(Line::from(format!(
-            "Util: {} %",
-            gpu.utilization_pct.map(|u| format!("{u:.0}")).unwrap_or("--".into())
-        )));
-        lines.push(Line::from(format!(
-            "VRAM: {}",
-            fmt_vram(gpu.vram_used_mb, gpu.vram_total_mb)
-        )));
-        lines.push(Line::from(format!(
-            "Power: {} W",
-            gpu.power_w.map(|p| format!("{p:.0}")).unwrap_or("--".into())
-        )));
-        lines.push(Line::from(format!("Fan: {} RPM", fmt_opt(&gpu.fan_rpm))));
+// Text lines (same as before, but remove the VRAM line)
+let mut lines: Vec<Line> = vec![];
+
+for (i, gpu) in app.metrics.iter().enumerate() {
+    if i > 0 {
+        lines.push(Line::from("")); // blank line between GPUs
     }
 
-    let body = Paragraph::new(Text::from(lines));
-    f.render_widget(body, inner);
+    lines.push(Line::from(format!("GPU {i}: {}", gpu.name)));
+    lines.push(Line::from(format!(
+        "Temp: {} °C",
+        gpu.temperature_c.map(|t| format!("{t:.1}")).unwrap_or("--".into())
+    )));
+    //lines.push(Line::from(format!(
+        //"Util: {} %",
+        //gpu.utilization_pct.map(|u| format!("{u:.0}")).unwrap_or("--".into())
+    //)));
+    lines.push(Line::from(format!(
+        "Power: {} W",
+        gpu.power_w.map(|p| format!("{p:.0}")).unwrap_or("--".into())
+    )));
+    lines.push(Line::from(format!("Fan: {} RPM", fmt_opt(&gpu.fan_rpm))));
+}
+
+let body = Paragraph::new(Text::from(lines));
+f.render_widget(body, inner_chunks[0]);
+
+// VRAM gauge (for now: based on GPU 0)
+let gpu0 = app.metrics.get(0);
+let (ratio, label) = if let Some(gpu) = gpu0 {
+    let r = vram_ratio(gpu.vram_used_mb, gpu.vram_total_mb);
+    let lbl = match (gpu.vram_used_mb, gpu.vram_total_mb) {
+        (Some(u), Some(t)) => format!("VRAM {u} / {t} MB"),
+        (Some(u), None) => format!("VRAM {u} / ? MB"),
+        _ => "VRAM --".into(),
+    };
+    (r, lbl)
+} else {
+    (0.0, "VRAM --".into())
+};
+
+let vram_gauge = Gauge::default()
+    .block(Block::default().borders(Borders::ALL).title("VRAM Usage"))
+    .ratio(ratio)
+    .label(label);
+
+
+// Utilization gauge (for now: based on GPU 0)
+let gpu0 = app.metrics.get(0);
+let (util_ratio, util_label) = if let Some(gpu) = gpu0 {
+    let r = pct_ratio(gpu.utilization_pct);
+    let lbl = gpu
+        .utilization_pct
+        .map(|u| format!("GPU Util {:.0}%", u))
+        .unwrap_or_else(|| "GPU Util --".into());
+    (r, lbl)
+} else {
+    (0.0, "GPU Util --".into())
+};
+
+let util_gauge = Gauge::default()
+    .block(Block::default().borders(Borders::ALL).title("Utilization"))
+    .ratio(util_ratio)
+    .label(util_label);
+
+f.render_widget(util_gauge, inner_chunks[1]);
+
+
+f.render_widget(vram_gauge, inner_chunks[2]);
 
     let footer = Paragraph::new(format!("Tick: {}   (data is mocked)", app.tick))
         .block(Block::default().borders(Borders::ALL).title("Footer"));
