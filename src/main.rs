@@ -9,8 +9,9 @@ use crossterm::{
 use ratatui::{
     backend::CrosstermBackend,
     layout::{Constraint, Direction, Layout},
-    text::{Line, Text},
+    text::{Line, Span, Text},
     widgets::{Block, Borders, Paragraph, Gauge},
+    style::{Color, Style},
     Terminal,
 };
 
@@ -18,11 +19,19 @@ use ratatui::{
 struct GpuMetrics {
     name: String,
     temperature_c: Option<f32>,
+    junction_temp_c: Option<f32>,
+    mem_temp_c: Option<f32>,
+
     utilization_pct: Option<f32>,
     vram_used_mb: Option<u32>,
     vram_total_mb: Option<u32>,
+
     power_w: Option<f32>,
     fan_rpm: Option<u32>,
+
+    core_clock_mhz: Option<u32>,
+    mem_clock_mhz: Option<u32>,
+
     timestamp: Instant,
 }
 
@@ -49,6 +58,35 @@ fn pct_ratio(pct: Option<f32>) -> f64 {
     pct.map(|p| (p.clamp(0.0, 100.0) as f64) / 100.0).unwrap_or(0.0)
 }
 
+fn gauge_style(r: f64) -> Style {
+    if r >= 0.90 {
+        Style::default().fg(Color::Red)
+    } else if r >= 0.75 {
+        Style::default().fg(Color::Yellow)
+    } else {
+        Style::default().fg(Color::Green)
+    }
+}
+
+fn temp_style(temp_c: Option<f32>) -> Style {
+    match temp_c {
+        Some(t) if t >= 90.0 => Style::default().fg(Color::Red),
+        Some(t) if t >= 80.0 => Style::default().fg(Color::Yellow),
+        Some(_) => Style::default().fg(Color::Green),
+        None => Style::default().fg(Color::DarkGray),
+    }
+}
+
+fn power_style(power_w: Option<f32>) -> Style {
+    match power_w {
+        Some(p) if p >= 300.0 => Style::default().fg(Color::Red),
+        Some(p) if p >= 220.0 => Style::default().fg(Color::Yellow),
+        Some(_) => Style::default().fg(Color::Green),
+        None => Style::default().fg(Color::DarkGray),
+    }
+}
+
+
 
 
 /// Fake sampler for macOS/dev. Later you’ll replace this with:
@@ -61,6 +99,10 @@ fn sample_fake(counter: u64) -> Vec<GpuMetrics> {
     let util = (counter % 100) as f32;                    // 0–99%
     let used = 1200 + (counter as u32 % 800);             // 1200–1999 MB
     let total = 16_384;
+    let junction = temp + 12.0 + ((counter % 10) as f32) * 0.2; // hotspot higher
+    let mem_temp = temp + 6.0;                                  // vram a bit higher
+    let core_clk = 800 + (counter as u32 % 1600);               // 800–2399 MHz
+    let mem_clk  = 1000 + (counter as u32 % 800);  
 
     vec![GpuMetrics {
         name: "AMD Radeon (mock)".to_string(),
@@ -70,6 +112,10 @@ fn sample_fake(counter: u64) -> Vec<GpuMetrics> {
         vram_total_mb: Some(total),
         power_w: Some(90.0 + (counter % 20) as f32),
         fan_rpm: Some(1200 + (counter as u32 % 400)),
+        junction_temp_c: Some(junction),
+        mem_temp_c: Some(mem_temp),
+        core_clock_mhz: Some(core_clk),
+        mem_clock_mhz: Some(mem_clk),
         timestamp: Instant::now(),
     }]
 }
@@ -180,18 +226,43 @@ for (i, gpu) in app.metrics.iter().enumerate() {
     }
 
     lines.push(Line::from(format!("GPU {i}: {}", gpu.name)));
-    lines.push(Line::from(format!(
-        "Temp: {} °C",
-        gpu.temperature_c.map(|t| format!("{t:.1}")).unwrap_or("--".into())
-    )));
+   
     //lines.push(Line::from(format!(
         //"Util: {} %",
         //gpu.utilization_pct.map(|u| format!("{u:.0}")).unwrap_or("--".into())
     //)));
-    lines.push(Line::from(format!(
-        "Power: {} W",
-        gpu.power_w.map(|p| format!("{p:.0}")).unwrap_or("--".into())
-    )));
+
+
+    // Temp line (colored)
+let temp_str = gpu.temperature_c.map(|t| format!("{t:.1}")).unwrap_or("--".into());
+lines.push(Line::from(vec![
+    Span::raw("Temp: "),
+    Span::styled(format!("{temp_str} °C"), temp_style(gpu.temperature_c)),
+]));
+
+lines.push(Line::from(format!(
+    "Junction: {} °C",
+    gpu.junction_temp_c.map(|t| format!("{t:.1}")).unwrap_or("--".into())
+)));
+lines.push(Line::from(format!(
+    "Mem Temp: {} °C",
+    gpu.mem_temp_c.map(|t| format!("{t:.1}")).unwrap_or("--".into())
+)));
+
+
+// Power line (colored)
+let power_str = gpu.power_w.map(|p| format!("{p:.0}")).unwrap_or("--".into());
+lines.push(Line::from(vec![
+    Span::raw("Power: "),
+    Span::styled(format!("{power_str} W"), power_style(gpu.power_w)),
+]));
+
+lines.push(Line::from(format!(
+    "Clocks: core {} MHz | mem {} MHz",
+    gpu.core_clock_mhz.map(|c| c.to_string()).unwrap_or("--".into()),
+    gpu.mem_clock_mhz.map(|c| c.to_string()).unwrap_or("--".into()),
+)));
+
     lines.push(Line::from(format!("Fan: {} RPM", fmt_opt(&gpu.fan_rpm))));
 }
 
@@ -214,8 +285,10 @@ let (ratio, label) = if let Some(gpu) = gpu0 {
 
 let vram_gauge = Gauge::default()
     .block(Block::default().borders(Borders::ALL).title("VRAM Usage"))
+    .gauge_style(gauge_style(ratio))
     .ratio(ratio)
     .label(label);
+
 
 
 // Utilization gauge (for now: based on GPU 0)
@@ -233,6 +306,7 @@ let (util_ratio, util_label) = if let Some(gpu) = gpu0 {
 
 let util_gauge = Gauge::default()
     .block(Block::default().borders(Borders::ALL).title("Utilization"))
+    .gauge_style(gauge_style(util_ratio))
     .ratio(util_ratio)
     .label(util_label);
 
