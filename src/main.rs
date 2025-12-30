@@ -86,10 +86,28 @@ fn power_style(power_w: Option<f32>) -> Style {
     }
 }
 
+fn junction_style(temp_c: Option<f32>) -> Style {
+    match temp_c {
+        Some(t) if t >= 105.0 => Style::default().fg(Color::Red),
+        Some(t) if t >= 95.0 => Style::default().fg(Color::Yellow),
+        Some(_) => Style::default().fg(Color::Green),
+        None => Style::default().fg(Color::DarkGray),
+    }
+}
+
+fn mem_temp_style(temp_c: Option<f32>) -> Style {
+    match temp_c {
+        Some(t) if t >= 95.0 => Style::default().fg(Color::Red),
+        Some(t) if t >= 85.0 => Style::default().fg(Color::Yellow),
+        Some(_) => Style::default().fg(Color::Green),
+        None => Style::default().fg(Color::DarkGray),
+    }
+}
 
 
 
-/// Fake sampler for macOS/dev. Later you’ll replace this with:
+
+/// Fake sampler for macOS/dev. Later I gotta replace this with:
 /// - AMD sysfs reader, OR
 /// - rocm-smi JSON parser, OR
 /// - Intel backend, etc.
@@ -240,14 +258,19 @@ lines.push(Line::from(vec![
     Span::styled(format!("{temp_str} °C"), temp_style(gpu.temperature_c)),
 ]));
 
-lines.push(Line::from(format!(
-    "Junction: {} °C",
-    gpu.junction_temp_c.map(|t| format!("{t:.1}")).unwrap_or("--".into())
-)));
-lines.push(Line::from(format!(
-    "Mem Temp: {} °C",
-    gpu.mem_temp_c.map(|t| format!("{t:.1}")).unwrap_or("--".into())
-)));
+// Junction line (colored)
+let junction_str = gpu.junction_temp_c.map(|t| format!("{t:.1}")).unwrap_or("--".into());
+lines.push(Line::from(vec![
+    Span::raw("Junction: "),
+    Span::styled(format!("{junction_str} °C"), junction_style(gpu.junction_temp_c)),
+]));
+
+// Mem Temp line (colored)
+let mem_str = gpu.mem_temp_c.map(|t| format!("{t:.1}")).unwrap_or("--".into());
+lines.push(Line::from(vec![
+    Span::raw("Mem Temp: "),
+    Span::styled(format!("{mem_str} °C"), mem_temp_style(gpu.mem_temp_c)),
+]));
 
 
 // Power line (colored)
