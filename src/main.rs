@@ -26,7 +26,7 @@ use ratatui::{
 /// Represents a snapshot of GPU metrics at a given point in time.
 /// All fields are Option<T> because not all GPUs or backends
 /// expose all metrics reliably.
-#[derive(Debug, Clone)]
+//#[derive(Debug, Clone)]
 
 
 /// Helper to format Option<T> values.
@@ -134,25 +134,28 @@ fn sample_fake(counter: u64) -> Vec<GpuMetrics> {
 
     let core_clk = 800 + (counter as u32 % 1600);
     let mem_clk  = 1000 + (counter as u32 % 800);
+    let gpu_id: "mock0".into(),
+    let max_core_clock_mhz: Some(3000),
+    let max_mem_clock_mhz: Some(2500),
 
     vec![GpuMetrics {
+        gpu_id: "mock0".into(),
         name: "AMD Radeon (mock)".to_string(),
         temperature_c: Some(temp),
         junction_temp_c: Some(junction),
         mem_temp_c: Some(mem_temp),
-
         utilization_pct: Some(util),
         vram_used_mb: Some(used),
         vram_total_mb: Some(total),
-
         power_w: Some(90.0 + (counter % 20) as f32),
         fan_rpm: Some(1200 + (counter as u32 % 400)),
-
         core_clock_mhz: Some(core_clk),
         mem_clock_mhz: Some(mem_clk),
-
+        max_core_clock_mhz: Some(3000),
+        max_mem_clock_mhz: Some(2500),
         timestamp: Instant::now(),
     }]
+
 }
 
 struct App {
