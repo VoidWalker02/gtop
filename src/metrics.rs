@@ -2,6 +2,18 @@ use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::time::Instant;
+use std::collections::HashMap;
+use std::sync::{Mutex, OnceLock};
+
+
+// Global cache for GPU identities.
+// We only want to run udevadm once per GPU PCI slot.
+static ID_CACHE: OnceLock<Mutex<HashMap<String, GpuIdentity>>> = OnceLock::new();
+
+fn cache() -> &'static Mutex<HashMap<String, GpuIdentity>> {
+    ID_CACHE.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
 
 #[derive(Debug, Clone)]
 pub struct GpuMetrics {
@@ -27,6 +39,14 @@ pub struct GpuMetrics {
 
     pub timestamp: Instant,
 }
+
+#[derive(Debug, Clone)]
+pub struct GpuIdentity {
+    pub pci_slot: String,          // "0000:03:00.0"
+    pub vendor: Option<String>,     // pretty string from udev db
+    pub model: Option<String>,      // pretty string from udev db
+}
+
 
 /* ------------------------- tiny file helpers ------------------------- */
 
@@ -88,6 +108,26 @@ fn pci_slot_name(card: &str) -> Option<String> {
     }
     None
 }
+
+fn get_identity_cached(pci_slot: &str) -> Option<GpuIdentity> {
+    // 1) Try cache first
+    if let Ok(guard) = cache().lock() {
+        if let Some(id) = guard.get(pci_slot) {
+            return Some(id.clone());
+        }
+    }
+
+    // 2) Not cached, fetch via udevadm
+    let id = read_udev_identity(pci_slot)?;
+
+    // 3) Store in cache
+    if let Ok(mut guard) = cache().lock() {
+        guard.insert(pci_slot.to_string(), id.clone());
+    }
+
+    Some(id)
+}
+
 
 /* ------------------------- parsing temps by label ------------------------- */
 
@@ -175,7 +215,18 @@ pub fn read_amd_sysfs(card: &str) -> GpuMetrics {
 
     // stable ID + name
     let pci = pci_slot_name(card).unwrap_or_else(|| card.to_string());
-    let name = format!("AMD GPU @ {pci}");
+
+    // Pull pretty name from udev once, then reuse from cache
+    let name = if let Some(id) = get_identity_cached(&pci) {
+        match (id.vendor, id.model) {
+            (Some(v), Some(m)) => format!("{v} — {m}"),
+            (_, Some(m)) => m,
+            (Some(v), None) => v,
+            _ => format!("AMD GPU @ {pci}"),
+        }
+    } else {
+        format!("AMD GPU @ {pci}")
+    };
 
     // util (0–100)
     let utilization_pct = read_f32(dev.join("gpu_busy_percent"));
