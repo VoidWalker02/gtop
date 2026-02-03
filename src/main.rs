@@ -236,7 +236,7 @@ fn ui(f: &mut ratatui::Frame, app: &App) {
         .split(size);
 
     let header_text = format!(
-        "gtop — AMD sysfs backend — {} — q to quit",
+        "gtop — AMD sysfs backend —— q to quit",
     );
 
     let header = Paragraph::new(header_text)
