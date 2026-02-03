@@ -237,10 +237,6 @@ fn ui(f: &mut ratatui::Frame, app: &App) {
 
     let header_text = format!(
         "gtop — AMD sysfs backend — {} — q to quit",
-        app.metrics
-            .get(0)
-            .map(|g| g.name.as_str())
-            .unwrap_or("No GPU detected")
     );
 
     let header = Paragraph::new(header_text)
