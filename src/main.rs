@@ -134,9 +134,6 @@ fn sample_fake(counter: u64) -> Vec<GpuMetrics> {
 
     let core_clk = 800 + (counter as u32 % 1600);
     let mem_clk  = 1000 + (counter as u32 % 800);
-    let gpu_id: "mock0".into(),
-    let max_core_clock_mhz: Some(3000),
-    let max_mem_clock_mhz: Some(2500),
 
     vec![GpuMetrics {
         gpu_id: "mock0".into(),

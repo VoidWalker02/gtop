@@ -63,6 +63,21 @@ fn find_hwmon_dir(card: &str) -> Option<PathBuf> {
     entries.into_iter().next()
 }
 
+fn read_power_w(hw: &std::path::Path) -> Option<f32> {
+    // Different kernels expose different files.
+    // On your dGPU (card1) it’s power1_average, on other setups it can be power1_input.
+    let candidates = ["power1_average", "power1_input"];
+
+    for name in candidates {
+        if let Some(v) = read_f32(hw.join(name)) {
+            // amdgpu hwmon power values are typically in microwatts.
+            return Some(v / 1_000_000.0);
+        }
+    }
+    None
+}
+
+
 fn pci_slot_name(card: &str) -> Option<String> {
     let uevent = device_dir(card).join("uevent");
     let text = read_trimmed(uevent).ok()?;
@@ -177,10 +192,11 @@ pub fn read_amd_sysfs(card: &str) -> GpuMetrics {
     // power (µW -> W) and fan (may not exist)
     let mut power_w = None;
     let mut fan_rpm = None;
-    if let Some(hw) = find_hwmon_dir(card) {
-        power_w = read_f32(hw.join("power1_input")).map(|uw| uw / 1_000_000.0);
-        fan_rpm = read_u32(hw.join("fan1_input"));
-    }
+   if let Some(hw) = find_hwmon_dir(card) {
+       power_w = read_power_w(&hw);
+       fan_rpm = read_u32(hw.join("fan1_input")); // may still be None if not exposed
+   }
+
 
     // clocks
     let (core_clock_mhz, max_core_clock_mhz) = parse_pp_dpm_current_and_max_mhz(dev.join("pp_dpm_sclk"));
