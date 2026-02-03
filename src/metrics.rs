@@ -4,6 +4,8 @@ use std::path::{Path, PathBuf};
 use std::time::Instant;
 use std::collections::HashMap;
 use std::sync::{Mutex, OnceLock};
+use std::process::Command;
+
 
 
 // Global cache for GPU identities.
@@ -83,6 +85,8 @@ fn find_hwmon_dir(card: &str) -> Option<PathBuf> {
     entries.into_iter().next()
 }
 
+
+
 fn read_power_w(hw: &std::path::Path) -> Option<f32> {
     // Different kernels expose different files.
     // On your dGPU (card1) it’s power1_average, on other setups it can be power1_input.
@@ -109,6 +113,46 @@ fn pci_slot_name(card: &str) -> Option<String> {
     None
 }
 
+// Pull vendor/model strings from udev's PCI database.
+#[cfg(target_os = "linux")]
+fn read_udev_identity(pci_slot: &str) -> Option<GpuIdentity> {
+    let sys_path = format!("/sys/bus/pci/devices/{pci_slot}");
+
+    let out = Command::new("udevadm")
+        .args(["info", "-q", "property", "-p", &sys_path])
+        .output()
+        .ok()?;
+
+    if !out.status.success() {
+        return None;
+    }
+
+    let s = String::from_utf8_lossy(&out.stdout);
+
+    let mut vendor = None;
+    let mut model = None;
+
+    for line in s.lines() {
+        if let Some(v) = line.strip_prefix("ID_VENDOR_FROM_DATABASE=") {
+            vendor = Some(v.to_string());
+        } else if let Some(m) = line.strip_prefix("ID_MODEL_FROM_DATABASE=") {
+            model = Some(m.to_string());
+        }
+    }
+
+    Some(GpuIdentity {
+        pci_slot: pci_slot.to_string(),
+        vendor,
+        model,
+    })
+}
+
+// If you compile on macOS/Windows, just skip udev and return None.
+#[cfg(not(target_os = "linux"))]
+fn read_udev_identity(_pci_slot: &str) -> Option<GpuIdentity> {
+    None
+}
+
 fn get_identity_cached(pci_slot: &str) -> Option<GpuIdentity> {
     // 1) Try cache first
     if let Ok(guard) = cache().lock() {
@@ -127,6 +171,9 @@ fn get_identity_cached(pci_slot: &str) -> Option<GpuIdentity> {
 
     Some(id)
 }
+
+
+
 
 
 /* ------------------------- parsing temps by label ------------------------- */
@@ -207,6 +254,11 @@ fn parse_pp_dpm_current_and_max_mhz(path: impl AsRef<Path>) -> (Option<u32>, Opt
 }
 
 /* ------------------------- public entry point ------------------------- */
+
+
+
+
+
 
 /// Read metrics for one AMD GPU card (ex: "card1") using sysfs/hwmon.
 /// No rocm-smi parsing, no JSON.
