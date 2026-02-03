@@ -2,6 +2,9 @@
 // We use Instant mainly to track when metrics were last updated.
 use std::io;
 use std::time::{Duration, Instant};
+mod metrics;
+use metrics::GpuMetrics;
+
 
 // Crossterm handles terminal input + raw mode.
 use crossterm::{
@@ -190,10 +193,11 @@ impl App {
         }
     }
 
-    fn on_tick(&mut self) {
-        self.metrics = sample_fake(self.tick);
-        self.tick += 1;
-    }
+fn on_tick(&mut self) {
+    // Use card1 because we confirmed it’s the real dGPU (16GB VRAM).
+    self.metrics = vec![metrics::read_amd_sysfs("card1")];
+    self.tick += 1;
+}
 
     fn on_key(&mut self, code: KeyCode) {
         match code {
