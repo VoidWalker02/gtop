@@ -27,30 +27,7 @@ use ratatui::{
 /// All fields are Option<T> because not all GPUs or backends
 /// expose all metrics reliably.
 #[derive(Debug, Clone)]
-struct GpuMetrics {
-    name: String,
 
-    // Temperatures
-    temperature_c: Option<f32>,     // Edge / core temp
-    junction_temp_c: Option<f32>,   // Hotspot / junction
-    mem_temp_c: Option<f32>,        // VRAM temperature
-
-    // Usage
-    utilization_pct: Option<f32>,
-    vram_used_mb: Option<u32>,
-    vram_total_mb: Option<u32>,
-
-    // Power / cooling
-    power_w: Option<f32>,
-    fan_rpm: Option<u32>,
-
-    // Clock speeds
-    core_clock_mhz: Option<u32>,
-    mem_clock_mhz: Option<u32>,
-
-    // Timestamp for freshness / debugging
-    timestamp: Instant,
-}
 
 /// Helper to format Option<T> values.
 /// If a metric isn’t available, show `--` instead of crashing or lying.
@@ -183,6 +160,7 @@ struct App {
     tick: u64,
     metrics: Vec<GpuMetrics>,
 }
+
 
 impl App {
     fn new() -> Self {
