@@ -235,8 +235,17 @@ fn ui(f: &mut ratatui::Frame, app: &App) {
         .constraints([Constraint::Length(3), Constraint::Min(0), Constraint::Length(3)])
         .split(size);
 
-    let header = Paragraph::new("gtop — mock metrics mode (MacBook) — q to quit")
+    let header_text = format!(
+        "gtop — AMD sysfs backend — {} — q to quit",
+        app.metrics
+            .get(0)
+            .map(|g| g.name.as_str())
+            .unwrap_or("No GPU detected")
+    );
+
+    let header = Paragraph::new(header_text)
         .block(Block::default().borders(Borders::ALL).title("Header"));
+
     f.render_widget(header, layout[0]);
 
     let main = Block::default().borders(Borders::ALL).title("GPU Metrics");
@@ -408,7 +417,7 @@ f.render_widget(util_gauge, inner_chunks[1]);
 
 f.render_widget(vram_gauge, inner_chunks[2]);
 
-    let footer = Paragraph::new(format!("Tick: {}   (data is mocked)", app.tick))
+    let footer = Paragraph::new(format!("Tick: {}", app.tick))
         .block(Block::default().borders(Borders::ALL).title("Footer"));
     f.render_widget(footer, layout[2]);
 }
