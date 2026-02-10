@@ -22,7 +22,7 @@ use ratatui::{
     backend::CrosstermBackend,
     layout::{Constraint, Direction, Layout, Margin},
     text::{Line, Span, Text},
-    widgets::{Block, Borders, Paragraph, Gauge, Sparkline, Clear, Table, Row, Cell},
+    widgets::{Block, Borders, Paragraph, Gauge, Sparkline, Clear, Table, Row, Cell, Wrap},
     style::{Color, Style, Modifier},
     Terminal,
 };
@@ -158,6 +158,14 @@ fn render_fixed_sparkline(
     f.render_widget(Clear, cols[0]);
 }
 
+fn pretty_gpu_name(raw: &str) -> String {
+    if let Some(idx) = raw.find("Radeon") {
+        raw[idx..].to_string()
+    } else {
+        raw.replace("Advanced Micro Devices, Inc. ", "")
+           .replace("[AMD/ATI] ", "")
+    }
+}
 
 
 
@@ -356,9 +364,7 @@ let right_chunks = Layout::default()
 // ===== Left side: a nice "GPU details" card =====
 let gpu0 = app.metrics.get(0);
 
-let details_block_title = gpu0
-    .map(|g| format!("GPU 0 — {}", g.name))
-    .unwrap_or_else(|| "GPU 0 — --".to_string());
+let details_block_title = "GPU 0".to_string();
 
 let details_block = Block::default()
     .borders(Borders::ALL)
@@ -369,7 +375,29 @@ f.render_widget(details_block.clone(), left_text);
 let details_area = details_block.inner(left_text);
 
 // Give the table a little padding so it doesn't hug the border
-let details_area = details_area.inner(&Margin { vertical: 1, horizontal: 1 });
+//let details_area = details_area.inner(&Margin { vertical: 1, horizontal: 1 });
+
+let details_chunks = Layout::default()
+    .direction(Direction::Vertical)
+    .constraints([
+        Constraint::Length(2), // GPU name (wrapped)
+        Constraint::Min(0),    // metrics table
+    ])
+    .split(details_area);
+
+if let Some(gpu) = gpu0 {
+    let device_name = Paragraph::new(pretty_gpu_name(&gpu.name))
+        .wrap(Wrap { trim: true })
+        .style(
+            Style::default()
+                .add_modifier(Modifier::BOLD)
+        );
+
+    f.render_widget(device_name, details_chunks[0]);
+}
+
+
+
 
 let table = if let Some(gpu) = gpu0 {
     // Pre-format strings once
@@ -381,6 +409,8 @@ let table = if let Some(gpu) = gpu0 {
     let core_str = gpu.core_clock_mhz.map(|c| format!("{c} MHz")).unwrap_or("--".into());
     let memclk_str = gpu.mem_clock_mhz.map(|c| format!("{c} MHz")).unwrap_or("--".into());
     let vram_str = fmt_vram(gpu.vram_used_mb, gpu.vram_total_mb);
+
+
 
     // Rows: Label | Value (with per-row styling on the value cell)
     let rows = vec![
@@ -430,7 +460,7 @@ let table = if let Some(gpu) = gpu0 {
     .column_spacing(2)
 };
 
-f.render_widget(table, details_area);
+f.render_widget(table, details_chunks[1]);
 
 
 // VRAM gauge
