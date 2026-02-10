@@ -141,3 +141,11 @@ pub fn stats_u64(vals: &[u64]) -> Option<(u64, u64, u64)> {
     let avg = sum / (vals.len() as u64);
     Some((min, avg, max))
 }
+
+pub fn series_to_points(vals: &[u64]) -> Vec<(f64, f64)> {
+    vals.iter()
+        .enumerate()
+        .map(|(i, v)| (i as f64, *v as f64))
+        .collect()
+}
+
