@@ -20,10 +20,10 @@ use crossterm::{
 // Ratatui is the TUI library used for layout, widgets, and styling.
 use ratatui::{
     backend::CrosstermBackend,
-    layout::{Constraint, Direction, Layout},
+    layout::{Constraint, Direction, Layout, Margin},
     text::{Line, Span, Text},
-    widgets::{Block, Borders, Paragraph, Gauge, Sparkline, Clear},
-    style::{Color, Style},
+    widgets::{Block, Borders, Paragraph, Gauge, Sparkline, Clear, Table, Row, Cell},
+    style::{Color, Style, Modifier},
     Terminal,
 };
 
@@ -157,6 +157,8 @@ fn render_fixed_sparkline(
     // Clear the gutter column so the 100 anchor doesn't show
     f.render_widget(Clear, cols[0]);
 }
+
+
 
 
 /// Fake sampler used during development on macOS.
@@ -351,85 +353,85 @@ let right_chunks = Layout::default()
 
 
 // Text lines
-let mut lines: Vec<Line> = vec![];
+// ===== Left side: a nice "GPU details" card =====
+let gpu0 = app.metrics.get(0);
 
+let details_block_title = gpu0
+    .map(|g| format!("GPU 0 — {}", g.name))
+    .unwrap_or_else(|| "GPU 0 — --".to_string());
 
+let details_block = Block::default()
+    .borders(Borders::ALL)
+    .title(details_block_title);
 
-for (i, gpu) in app.metrics.iter().enumerate() {
-    if i > 0 {
-        lines.push(Line::from("")); // blank line between GPUs
-    }
+f.render_widget(details_block.clone(), left_text);
 
+let details_area = details_block.inner(left_text);
 
+// Give the table a little padding so it doesn't hug the border
+let details_area = details_area.inner(&Margin { vertical: 1, horizontal: 1 });
 
-let short_name = gpu.name
-    .split('(')
-    .next()
-    .unwrap_or(&gpu.name)
-    .trim();
+let table = if let Some(gpu) = gpu0 {
+    // Pre-format strings once
+    let temp_str = gpu.temperature_c.map(|t| format!("{t:.1} °C")).unwrap_or("--".into());
+    let junction_str = gpu.junction_temp_c.map(|t| format!("{t:.1} °C")).unwrap_or("--".into());
+    let mem_str = gpu.mem_temp_c.map(|t| format!("{t:.1} °C")).unwrap_or("--".into());
+    let power_str = gpu.power_w.map(|p| format!("{p:.0} W")).unwrap_or("--".into());
+    let fan_str = gpu.fan_rpm.map(|r| format!("{r} RPM")).unwrap_or("--".into());
+    let core_str = gpu.core_clock_mhz.map(|c| format!("{c} MHz")).unwrap_or("--".into());
+    let memclk_str = gpu.mem_clock_mhz.map(|c| format!("{c} MHz")).unwrap_or("--".into());
+    let vram_str = fmt_vram(gpu.vram_used_mb, gpu.vram_total_mb);
 
-lines.push(Line::from(vec![
-    Span::styled(
-        short_name,
-        Style::default().fg(Color::White).add_modifier(ratatui::style::Modifier::BOLD),
-    ),
-]));
+    // Rows: Label | Value (with per-row styling on the value cell)
+    let rows = vec![
+        Row::new(vec![
+            Cell::from("Temp"),
+            Cell::from(Line::from(Span::styled(temp_str, temp_style(gpu.temperature_c)))),
+        ]),
+        Row::new(vec![
+            Cell::from("Junction"),
+            Cell::from(Line::from(Span::styled(junction_str, junction_style(gpu.junction_temp_c)))),
+        ]),
+        Row::new(vec![
+            Cell::from("Mem Temp"),
+            Cell::from(Line::from(Span::styled(mem_str, mem_temp_style(gpu.mem_temp_c)))),
+        ]),
+        Row::new(vec![
+            Cell::from("Power"),
+            Cell::from(Line::from(Span::styled(power_str, power_style(gpu.power_w)))),
+        ]),
+        Row::new(vec![
+            Cell::from("Fan"),
+            Cell::from(fan_str),
+        ]),
+        Row::new(vec![
+            Cell::from("VRAM"),
+            Cell::from(vram_str),
+        ]),
+        Row::new(vec![
+            Cell::from("Clocks"),
+            Cell::from(format!("core {core_str} | mem {memclk_str}")),
+        ]),
+    ];
 
-lines.push(Line::from(vec![
-    Span::styled(
-        gpu.name.clone(),
-        Style::default().fg(Color::DarkGray),
-    ),
-]));
+    Table::new(
+        rows,
+        [
+            Constraint::Length(10), // label column
+            Constraint::Min(0),     // value column
+        ],
+    )
+    .column_spacing(2)
+} else {
+    Table::new(
+        vec![Row::new(vec![Cell::from("No GPU data"), Cell::from("--")])],
+        [Constraint::Length(10), Constraint::Min(0)],
+    )
+    .column_spacing(2)
+};
 
-lines.push(Line::from("")); // spacer
-   ///Trying to use a bar instead, remember to delete this if that works
-    //lines.push(Line::from(format!(
-        //"Util: {} %",
-        //gpu.utilization_pct.map(|u| format!("{u:.0}")).unwrap_or("--".into())
-    //)));
+f.render_widget(table, details_area);
 
-
-    // Temp line (colored)
-let temp_str = gpu.temperature_c.map(|t| format!("{t:.1}")).unwrap_or("--".into());
-lines.push(Line::from(vec![
-    Span::raw("Temp: "),
-    Span::styled(format!("{temp_str} °C"), temp_style(gpu.temperature_c)),
-]));
-
-// Junction line (colored)
-let junction_str = gpu.junction_temp_c.map(|t| format!("{t:.1}")).unwrap_or("--".into());
-lines.push(Line::from(vec![
-    Span::raw("Junction: "),
-    Span::styled(format!("{junction_str} °C"), junction_style(gpu.junction_temp_c)),
-]));
-
-// Mem Temp line (colored)
-let mem_str = gpu.mem_temp_c.map(|t| format!("{t:.1}")).unwrap_or("--".into());
-lines.push(Line::from(vec![
-    Span::raw("Mem Temp: "),
-    Span::styled(format!("{mem_str} °C"), mem_temp_style(gpu.mem_temp_c)),
-]));
-
-
-// Power line (colored)
-let power_str = gpu.power_w.map(|p| format!("{p:.0}")).unwrap_or("--".into());
-lines.push(Line::from(vec![
-    Span::raw("Power: "),
-    Span::styled(format!("{power_str} W"), power_style(gpu.power_w)),
-]));
-
-lines.push(Line::from(format!(
-    "Clocks: core {} MHz | mem {} MHz",
-    gpu.core_clock_mhz.map(|c| c.to_string()).unwrap_or("--".into()),
-    gpu.mem_clock_mhz.map(|c| c.to_string()).unwrap_or("--".into()),
-)));
-
-    lines.push(Line::from(format!("Fan: {} RPM", fmt_opt(&gpu.fan_rpm))));
-}
-
-let body = Paragraph::new(Text::from(lines));
-f.render_widget(body, left_text);
 
 // VRAM gauge
 let gpu0 = app.metrics.get(0);
