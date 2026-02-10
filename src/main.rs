@@ -353,9 +353,32 @@ let right_chunks = Layout::default()
 // Text lines
 let mut lines: Vec<Line> = vec![];
 
+
+
 for (i, gpu) in app.metrics.iter().enumerate() {
     if i > 0 {
-        lines.push(Line::from("")); // blank line between GPUs
+// Extract a short name (simple heuristic)
+let short_name = gpu.name
+    .split('(')
+    .next()
+    .unwrap_or(&gpu.name)
+    .trim();
+
+lines.push(Line::from(vec![
+    Span::styled(
+        short_name,
+        Style::default().fg(Color::White).add_modifier(ratatui::style::Modifier::BOLD),
+    ),
+]));
+
+lines.push(Line::from(vec![
+    Span::styled(
+        gpu.name.clone(),
+        Style::default().fg(Color::DarkGray),
+    ),
+]));
+
+lines.push(Line::from("")); // spacer
     }
 
     lines.push(Line::from(format!("GPU {i}: {}", gpu.name)));
