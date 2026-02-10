@@ -22,7 +22,7 @@ use ratatui::{
     backend::CrosstermBackend,
     layout::{Constraint, Direction, Layout},
     text::{Line, Span, Text},
-    widgets::{Block, Borders, Paragraph, Gauge, Sparkline},
+    widgets::{Block, Borders, Paragraph, Gauge, Sparkline, Clear},
     style::{Color, Style},
     Terminal,
 };
@@ -123,6 +123,41 @@ fn mem_temp_style(temp_c: Option<f32>) -> Style {
         None => Style::default().fg(Color::DarkGray),
     }
 }
+
+fn anchored_100(series: &[u64]) -> Vec<u64> {
+    let mut v = Vec::with_capacity(series.len() + 1);
+    v.push(100);           // anchor forces max(data)=100
+    v.extend_from_slice(series);
+    v
+}
+
+fn render_fixed_sparkline(
+    f: &mut ratatui::Frame,
+    area: ratatui::layout::Rect,
+    title: &str,
+    series_0_100: &[u64],
+) {
+    let block = Block::default().borders(Borders::ALL).title(title);
+    f.render_widget(block.clone(), area);
+
+    let inner = block.inner(area);
+
+    // 1-column gutter on the left to hide the anchor
+    let cols = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([Constraint::Length(1), Constraint::Min(0)])
+        .split(inner);
+
+    let anchored = anchored_100(series_0_100);
+
+    // Render sparkline across full inner (including the gutter column)
+    let sp = Sparkline::default().data(&anchored);
+    f.render_widget(sp, inner);
+
+    // Clear the gutter column so the 100 anchor doesn't show
+    f.render_widget(Clear, cols[0]);
+}
+
 
 /// Fake sampler used during development on macOS.
 /// This lets me build and polish the UI before wiring in real Linux data.
@@ -418,21 +453,9 @@ let util_vals = app.hist0.util_series_pct_u64();
 let vram_vals = app.hist0.vram_series_norm_0_100(gpu0.and_then(|g| g.vram_total_mb));
 let core_vals = app.hist0.core_series_norm_0_100(gpu0.and_then(|g| g.max_core_clock_mhz), 3000);
 
-let util_sp = Sparkline::default()
-    .block(Block::default().borders(Borders::ALL).title("Util (60s)"))
-    .data(&util_vals);
-
-let vram_sp = Sparkline::default()
-    .block(Block::default().borders(Borders::ALL).title("VRAM % (60s)"))
-    .data(&vram_vals);
-
-let core_sp = Sparkline::default()
-    .block(Block::default().borders(Borders::ALL).title("Core % (60s)"))
-    .data(&core_vals);
-
-f.render_widget(util_sp, right_chunks[0]);
-f.render_widget(vram_sp, right_chunks[1]);
-f.render_widget(core_sp, right_chunks[2]);
+render_fixed_sparkline(f, right_chunks[0], "Util % (60s)", &util_vals);
+render_fixed_sparkline(f, right_chunks[1], "VRAM % (60s)", &vram_vals);
+render_fixed_sparkline(f, right_chunks[2], "Core % (60s)", &core_vals);
 
 
 let util_stats = stats_u64(&util_vals);
