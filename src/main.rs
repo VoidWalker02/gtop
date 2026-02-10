@@ -5,7 +5,7 @@ use std::time::{Duration, Instant};
 mod metrics;
 use metrics::GpuMetrics;
 mod stats;
-use stats::{GpuHistory, GpuSample, stats_u64, series_to_points};
+use stats::{GpuHistory, GpuSample, stats_u64};
 use std::collections::VecDeque;
 
 
@@ -22,7 +22,7 @@ use ratatui::{
     backend::CrosstermBackend,
     layout::{Constraint, Direction, Layout},
     text::{Line, Span, Text},
-    widgets::{Block, Borders, Paragraph, Gauge, Sparkline, Chart, Dataset, Axis, GraphType},
+    widgets::{Block, Borders, Paragraph, Gauge, Sparkline},
     style::{Color, Style},
     Terminal,
 };
@@ -418,44 +418,21 @@ let util_vals = app.hist0.util_series_pct_u64();
 let vram_vals = app.hist0.vram_series_norm_0_100(gpu0.and_then(|g| g.vram_total_mb));
 let core_vals = app.hist0.core_series_norm_0_100(gpu0.and_then(|g| g.max_core_clock_mhz), 3000);
 
-let util_points = series_to_points(&util_vals);
-let vram_points = series_to_points(&vram_vals);
-let core_points = series_to_points(&core_vals);
+let util_sp = Sparkline::default()
+    .block(Block::default().borders(Borders::ALL).title("Util (60s)"))
+    .data(&util_vals);
 
-let util_chart = Chart::new(vec![
-    Dataset::default()
-        .name("util")
-        .graph_type(GraphType::Line)
-        .data(&util_points),
-])
-.block(Block::default().borders(Borders::ALL).title("Util % (60s)"))
-.x_axis(Axis::default().bounds([0.0, (vram_vals.len().saturating_sub(1)) as f64]))
-.y_axis(Axis::default().bounds([0.0, 100.0]));
+let vram_sp = Sparkline::default()
+    .block(Block::default().borders(Borders::ALL).title("VRAM % (60s)"))
+    .data(&vram_vals);
 
+let core_sp = Sparkline::default()
+    .block(Block::default().borders(Borders::ALL).title("Core % (60s)"))
+    .data(&core_vals);
 
-let vram_chart = Chart::new(vec![
-    Dataset::default()
-        .name("vram")
-        .graph_type(GraphType::Line)
-        .data(&vram_points),
-])
-.block(Block::default().borders(Borders::ALL).title("VRAM % (60s)"))
-.x_axis(Axis::default().bounds([0.0, (vram_vals.len().saturating_sub(1)) as f64]))
-.y_axis(Axis::default().bounds([0.0, 100.0]));
-
-let core_chart = Chart::new(vec![
-    Dataset::default()
-        .name("Core")
-        .graph_type(GraphType::Line)
-        .data(&core_points),
-])
-.block(Block::default().borders(Borders::ALL).title("Core clock % (60s)"))
-.x_axis(Axis::default().bounds([0.0, (vram_vals.len().saturating_sub(1)) as f64]))
-.y_axis(Axis::default().bounds([0.0, 100.0]));
-
-f.render_widget(util_chart, right_chunks[0]);
-f.render_widget(vram_chart, right_chunks[1]);
-f.render_widget(core_chart, right_chunks[2]);
+f.render_widget(util_sp, right_chunks[0]);
+f.render_widget(vram_sp, right_chunks[1]);
+f.render_widget(core_sp, right_chunks[2]);
 
 
 let util_stats = stats_u64(&util_vals);
