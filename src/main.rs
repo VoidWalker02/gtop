@@ -357,7 +357,11 @@ let mut lines: Vec<Line> = vec![];
 
 for (i, gpu) in app.metrics.iter().enumerate() {
     if i > 0 {
-// Extract a short name (simple heuristic)
+        lines.push(Line::from("")); // blank line between GPUs
+    }
+
+
+
 let short_name = gpu.name
     .split('(')
     .next()
@@ -379,10 +383,6 @@ lines.push(Line::from(vec![
 ]));
 
 lines.push(Line::from("")); // spacer
-    }
-
-    lines.push(Line::from(format!("GPU {i}: {}", gpu.name)));
-
    ///Trying to use a bar instead, remember to delete this if that works
     //lines.push(Line::from(format!(
         //"Util: {} %",
