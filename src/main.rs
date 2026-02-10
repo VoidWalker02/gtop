@@ -4,6 +4,10 @@ use std::io;
 use std::time::{Duration, Instant};
 mod metrics;
 use metrics::GpuMetrics;
+mod stats;
+use stats::{GpuHistory, GpuSample, stats_u64};
+use std::collections::VecDeque;
+
 
 
 // Crossterm handles terminal input and raw mode.
@@ -18,7 +22,7 @@ use ratatui::{
     backend::CrosstermBackend,
     layout::{Constraint, Direction, Layout},
     text::{Line, Span, Text},
-    widgets::{Block, Borders, Paragraph, Gauge},
+    widgets::{Block, Borders, Paragraph, Gauge, Sparkline},
     style::{Color, Style},
     Terminal,
 };
@@ -161,6 +165,7 @@ struct App {
     running: bool,
     tick: u64,
     metrics: Vec<GpuMetrics>,
+    hist0: GpuHistory,
 }
 
 
@@ -171,15 +176,28 @@ impl App {
             running: true,
             tick: 0,
             metrics: vec![],
+            hist0: GpuHistory::new(120)
         }
     }
 
 ///What to do every tick
-fn on_tick(&mut self) {
-    // Use card1 because we confirmed it’s the real dGPU (16GB VRAM).
-    self.metrics = vec![metrics::read_amd_sysfs("card1")];
-    self.tick += 1;
-}
+    fn on_tick(&mut self) {
+        self.metrics = vec![metrics::read_amd_sysfs("card1")];
+
+        if let Some(gpu) = self.metrics.get(0) {
+            self.hist0.push(GpuSample {
+                t: Instant::now(),
+                util_pct: gpu.utilization_pct,
+                vram_used_mb: gpu.vram_used_mb,
+                core_mhz: gpu.core_clock_mhz,
+                mem_mhz: gpu.mem_clock_mhz,
+                temp_c: gpu.temperature_c,
+                power_w: gpu.power_w,
+            });
+        }
+
+        self.tick += 1;
+    }
 
 ///If user presses q, quit, to add more commands later.
     fn on_key(&mut self, code: KeyCode) {
@@ -271,6 +289,30 @@ let inner_chunks = Layout::default()
         Constraint::Length(3) // mem clock
     ])
     .split(inner);
+let top_row = Layout::default()
+    .direction(Direction::Horizontal)
+    .constraints([
+        Constraint::Percentage(60), // left text
+        Constraint::Percentage(40), // right graphs/stats
+    ])
+    .split(inner_chunks[0]);
+
+let left_text = top_row[0];
+let right_side = top_row[1];
+
+let right_chunks = Layout::default()
+    .direction(Direction::Vertical)
+    .constraints([
+        Constraint::Length(4), // util sparkline
+        Constraint::Length(4), // vram sparkline
+        Constraint::Length(4), // core sparkline
+        Constraint::Length(5), // stats block
+        Constraint::Min(0),
+    ])
+    .split(right_side);
+
+
+
 
 
 // Text lines
@@ -329,7 +371,7 @@ lines.push(Line::from(format!(
 }
 
 let body = Paragraph::new(Text::from(lines));
-f.render_widget(body, inner_chunks[0]);
+f.render_widget(body, left_text);
 
 // VRAM gauge
 let gpu0 = app.metrics.get(0);
@@ -371,6 +413,57 @@ let util_gauge = Gauge::default()
     .gauge_style(gauge_style(util_ratio))
     .ratio(util_ratio)
     .label(util_label);
+
+let util_vals = app.hist0.util_series_pct_u64();
+let vram_vals = app.hist0.vram_series_norm_0_100(gpu0.and_then(|g| g.vram_total_mb));
+let core_vals = app.hist0.core_series_norm_0_100(gpu0.and_then(|g| g.max_core_clock_mhz), 3000);
+
+let util_sp = Sparkline::default()
+    .block(Block::default().borders(Borders::ALL).title("Util (60s)"))
+    .data(&util_vals);
+
+let vram_sp = Sparkline::default()
+    .block(Block::default().borders(Borders::ALL).title("VRAM % (60s)"))
+    .data(&vram_vals);
+
+let core_sp = Sparkline::default()
+    .block(Block::default().borders(Borders::ALL).title("Core % (60s)"))
+    .data(&core_vals);
+
+f.render_widget(util_sp, right_chunks[0]);
+f.render_widget(vram_sp, right_chunks[1]);
+f.render_widget(core_sp, right_chunks[2]);
+
+
+let util_stats = stats_u64(&util_vals);
+let vram_stats = stats_u64(&vram_vals);
+let core_stats = stats_u64(&core_vals);
+
+let stats_lines = vec![
+    Line::from(format!(
+        "Util   min/avg/max: {} / {} / {}",
+        util_stats.map(|s| s.0.to_string()).unwrap_or("--".into()),
+        util_stats.map(|s| s.1.to_string()).unwrap_or("--".into()),
+        util_stats.map(|s| s.2.to_string()).unwrap_or("--".into()),
+    )),
+    Line::from(format!(
+        "VRAM%  min/avg/max: {} / {} / {}",
+        vram_stats.map(|s| s.0.to_string()).unwrap_or("--".into()),
+        vram_stats.map(|s| s.1.to_string()).unwrap_or("--".into()),
+        vram_stats.map(|s| s.2.to_string()).unwrap_or("--".into()),
+    )),
+    Line::from(format!(
+        "Core%  min/avg/max: {} / {} / {}",
+        core_stats.map(|s| s.0.to_string()).unwrap_or("--".into()),
+        core_stats.map(|s| s.1.to_string()).unwrap_or("--".into()),
+        core_stats.map(|s| s.2.to_string()).unwrap_or("--".into()),
+    )),
+];
+
+let stats_widget = Paragraph::new(Text::from(stats_lines))
+    .block(Block::default().borders(Borders::ALL).title("Stats (60s)"));
+
+f.render_widget(stats_widget, right_chunks[3]);
 
 
 // Clocks gauges (GPU 0)
