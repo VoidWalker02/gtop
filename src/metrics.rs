@@ -9,7 +9,7 @@ use std::process::Command;
 
 
 // Global cache for GPU identities.
-// We only want to run udevadm once per GPU PCI slot.
+// We only want to run udevadm once per GPU PCI slot, only need the data once
 static ID_CACHE: OnceLock<Mutex<HashMap<String, GpuIdentity>>> = OnceLock::new();
 
 fn cache() -> &'static Mutex<HashMap<String, GpuIdentity>> {
@@ -19,8 +19,8 @@ fn cache() -> &'static Mutex<HashMap<String, GpuIdentity>> {
 
 #[derive(Debug, Clone)]
 pub struct GpuMetrics {
-    pub gpu_id: String, // we’ll use PCI slot (stable) as an ID
-    pub name: String,
+    pub gpu_id: String, // GPU PCI slot can act as an ID
+    pub name: String, //commercial gpu name
 
     pub temperature_c: Option<f32>,
     pub junction_temp_c: Option<f32>,
@@ -43,6 +43,7 @@ pub struct GpuMetrics {
 }
 
 #[derive(Debug, Clone)]
+//Collection of data used to identify the current gpu
 pub struct GpuIdentity {
     pub pci_slot: String,          // "0000:03:00.0"
     pub vendor: Option<String>,     // pretty string from udev db
@@ -50,7 +51,9 @@ pub struct GpuIdentity {
 }
 
 
-/* ------------------------- tiny file helpers ------------------------- */
+/* ------------------------- file helpers ------------------------- */
+
+///Helpers used to help parse the filepaths for the data being sampled from the kernel
 
 fn read_trimmed(path: impl AsRef<Path>) -> io::Result<String> {
     Ok(fs::read_to_string(path)?.trim().to_string())
@@ -70,26 +73,43 @@ fn read_f32(path: impl AsRef<Path>) -> Option<f32> {
 
 /* ------------------------- locating sysfs bits ------------------------- */
 
+//Locating where all the gpu data is in the guts of sysfs
+
 fn device_dir(card: &str) -> PathBuf {
     PathBuf::from(format!("/sys/class/drm/{card}/device"))
 }
 
 fn find_hwmon_dir(card: &str) -> Option<PathBuf> {
     let base = device_dir(card).join("hwmon");
-    let mut entries = fs::read_dir(base).ok()?
+
+    // Collect once (no iterator cloning needed)
+    let mut dirs: Vec<PathBuf> = fs::read_dir(&base).ok()?
         .filter_map(|e| e.ok())
         .map(|e| e.path())
         .filter(|p| p.is_dir())
-        .collect::<Vec<_>>();
-    entries.sort();
-    entries.into_iter().next()
+        .collect();
+
+    dirs.sort();
+
+    // Prefer the hwmon whose "name" contains "amdgpu"
+    for p in &dirs {
+        if let Ok(name) = read_trimmed(p.join("name")) {
+            if name.to_lowercase().contains("amdgpu") {
+                return Some(p.clone());
+            }
+        }
+    }
+
+    // Fallback: first entry
+    dirs.into_iter().next()
 }
+
 
 
 
 fn read_power_w(hw: &std::path::Path) -> Option<f32> {
     // Different kernels expose different files.
-    // On your dGPU (card1) it’s power1_average, on other setups it can be power1_input.
+    // On my dGPU (card1) it’s power1_average, on other setups it can be power1_input.
     let candidates = ["power1_average", "power1_input"];
 
     for name in candidates {
@@ -101,7 +121,7 @@ fn read_power_w(hw: &std::path::Path) -> Option<f32> {
     None
 }
 
-
+//Harvest the PCI slot name (id)
 fn pci_slot_name(card: &str) -> Option<String> {
     let uevent = device_dir(card).join("uevent");
     let text = read_trimmed(uevent).ok()?;
@@ -113,7 +133,7 @@ fn pci_slot_name(card: &str) -> Option<String> {
     None
 }
 
-// Pull vendor/model strings from udev's PCI database.
+// Pull vendor/model strings from udev's PCI database
 #[cfg(target_os = "linux")]
 fn read_udev_identity(pci_slot: &str) -> Option<GpuIdentity> {
     let sys_path = format!("/sys/bus/pci/devices/{pci_slot}");

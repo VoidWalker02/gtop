@@ -1,19 +1,19 @@
 // Standard IO + time utilities.
-// We use Instant mainly to track when metrics were last updated.
+//Instant used to track when metrics were last updated.
 use std::io;
 use std::time::{Duration, Instant};
 mod metrics;
 use metrics::GpuMetrics;
 
 
-// Crossterm handles terminal input + raw mode.
+// Crossterm handles terminal input and raw mode.
 use crossterm::{
     event::{self, Event, KeyCode, KeyEventKind},
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
 
-// Ratatui is the TUI library we’re using for layout, widgets, and styling.
+// Ratatui is the TUI library used for layout, widgets, and styling.
 use ratatui::{
     backend::CrosstermBackend,
     layout::{Constraint, Direction, Layout},
@@ -122,8 +122,9 @@ fn mem_temp_style(temp_c: Option<f32>) -> Style {
 
 /// Fake sampler used during development on macOS.
 /// This lets me build and polish the UI before wiring in real Linux data.
+///To be phased out eventually
 fn sample_fake(counter: u64) -> Vec<GpuMetrics> {
-    // Fake but realistic-ish values so the UI animates.
+    // Fake but realistic-ish values so the UI looks good.
     let temp = 45.0 + ((counter % 30) as f32) * 0.3;
     let util = (counter % 100) as f32;
     let used = 1200 + (counter as u32 % 800);
@@ -155,6 +156,7 @@ fn sample_fake(counter: u64) -> Vec<GpuMetrics> {
 
 }
 
+///Running instance of gtop
 struct App {
     running: bool,
     tick: u64,
@@ -162,6 +164,7 @@ struct App {
 }
 
 
+///"""constructor""" for the gtop application
 impl App {
     fn new() -> Self {
         Self {
@@ -171,12 +174,14 @@ impl App {
         }
     }
 
+///What to do every tick
 fn on_tick(&mut self) {
     // Use card1 because we confirmed it’s the real dGPU (16GB VRAM).
     self.metrics = vec![metrics::read_amd_sysfs("card1")];
     self.tick += 1;
 }
 
+///If user presses q, quit, to add more commands later.
     fn on_key(&mut self, code: KeyCode) {
         match code {
             KeyCode::Char('q') | KeyCode::Esc => self.running = false,
@@ -185,6 +190,7 @@ fn on_tick(&mut self) {
     }
 }
 
+///This is the general loop of the application
 fn main() -> io::Result<()> {
     enable_raw_mode()?;
     let mut stdout = io::stdout();
@@ -201,6 +207,7 @@ fn main() -> io::Result<()> {
     res
 }
 
+///Core gtop loop, meat and potatoes of the application
 fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> io::Result<()> {
     let mut app = App::new();
     let tick_rate = Duration::from_millis(500);
@@ -211,7 +218,7 @@ fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> io::Result<
     while app.running {
         terminal.draw(|f| ui(f, &app))?;
 
-        // Input (non-blocking with timeout)
+        // Handle Input
         if event::poll(tick_rate)? {
             if let Event::Key(key) = event::read()? {
                 if key.kind == KeyEventKind::Press {
@@ -227,6 +234,7 @@ fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> io::Result<
     Ok(())
 }
 
+///Rendering and setting up the file
 fn ui(f: &mut ratatui::Frame, app: &App) {
     let size = f.size();
 
@@ -234,7 +242,7 @@ fn ui(f: &mut ratatui::Frame, app: &App) {
         .direction(Direction::Vertical)
         .constraints([Constraint::Length(3), Constraint::Min(0), Constraint::Length(3)])
         .split(size);
-
+///top header text
     let header_text = format!(
         "gtop — AMD sysfs backend —— q to quit",
     );
@@ -251,8 +259,8 @@ fn ui(f: &mut ratatui::Frame, app: &App) {
     let inner = main.inner(layout[1]);
 
     // Split the main inner area into:
-// - a text area
-// - a small gauge area at the bottom
+// -  text area
+// -  small gauge area at the bottom
 let inner_chunks = Layout::default()
     .direction(Direction::Vertical)
     .constraints([
@@ -265,7 +273,7 @@ let inner_chunks = Layout::default()
     .split(inner);
 
 
-// Text lines (same as before, but remove the VRAM line)
+// Text lines
 let mut lines: Vec<Line> = vec![];
 
 for (i, gpu) in app.metrics.iter().enumerate() {
@@ -274,7 +282,8 @@ for (i, gpu) in app.metrics.iter().enumerate() {
     }
 
     lines.push(Line::from(format!("GPU {i}: {}", gpu.name)));
-   
+
+   ///Trying to use a bar instead, remember to delete this if that works
     //lines.push(Line::from(format!(
         //"Util: {} %",
         //gpu.utilization_pct.map(|u| format!("{u:.0}")).unwrap_or("--".into())
@@ -322,7 +331,7 @@ lines.push(Line::from(format!(
 let body = Paragraph::new(Text::from(lines));
 f.render_widget(body, inner_chunks[0]);
 
-// VRAM gauge (for now: based on GPU 0)
+// VRAM gauge
 let gpu0 = app.metrics.get(0);
 let (ratio, label) = if let Some(gpu) = gpu0 {
     let r = vram_ratio(gpu.vram_used_mb, gpu.vram_total_mb);
@@ -344,7 +353,7 @@ let vram_gauge = Gauge::default()
 
 
 
-// Utilization gauge (for now: based on GPU 0)
+// Utilization gauge
 let gpu0 = app.metrics.get(0);
 let (util_ratio, util_label) = if let Some(gpu) = gpu0 {
     let r = pct_ratio(gpu.utilization_pct);
