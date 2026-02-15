@@ -3,7 +3,7 @@
 use std::io;
 use std::time::{Duration, Instant};
 mod metrics;
-use metrics::GpuMetrics;
+use metrics::{GpuMetrics, get_mesa_version};
 mod stats;
 use stats::{GpuHistory, GpuSample, stats_u64};
 use std::collections::VecDeque;
@@ -39,6 +39,23 @@ fn fmt_opt<T: std::fmt::Display>(v: &Option<T>) -> String {
     v.as_ref().map(|x| x.to_string()).unwrap_or_else(|| "--".into())
 }
 
+fn delta_opt_f32(a: Option<f32>, b: Option<f32>) -> Option<f32> {
+    Some(b? - a?)
+}
+
+fn delta_opt_u32(a: Option<u32>, b: Option<u32>) -> Option<i32> {
+    Some(b? as i32 - a? as i32)
+}
+
+fn fmt_delta_f32(v: Option<f32>, unit: &str) -> String {
+    v.map(|x| format!("{:+.0} {}", x, unit)).unwrap_or_else(|| "--".into())
+}
+
+fn fmt_delta_i32(v: Option<i32>, unit: &str) -> String {
+    v.map(|x| format!("{:+} {}", x, unit)).unwrap_or_else(|| "--".into())
+}
+
+
 /// Formats VRAM usage nicely.
 fn fmt_vram(used: Option<u32>, total: Option<u32>) -> String {
     match (used, total) {
@@ -69,6 +86,11 @@ fn mhz_ratio(mhz: Option<u32>, max_mhz: u32) -> f64 {
         _ => 0.0,
     }
 }
+
+fn read_trim(path: &str) -> Option<String> {
+    std::fs::read_to_string(path).ok().map(|s| s.trim().to_string())
+}
+
 
 /// Shared gauge coloring logic.
 /// Red means “probably bad”, yellow is warning, green is normal.
@@ -169,41 +191,6 @@ fn pretty_gpu_name(raw: &str) -> String {
 
 
 
-/// Fake sampler used during development on macOS.
-/// This lets me build and polish the UI before wiring in real Linux data.
-///To be phased out eventually
-fn sample_fake(counter: u64) -> Vec<GpuMetrics> {
-    // Fake but realistic-ish values so the UI looks good.
-    let temp = 45.0 + ((counter % 30) as f32) * 0.3;
-    let util = (counter % 100) as f32;
-    let used = 1200 + (counter as u32 % 800);
-    let total = 16_384;
-
-    let junction = temp + 12.0 + ((counter % 10) as f32) * 0.2;
-    let mem_temp = temp + 6.0;
-
-    let core_clk = 800 + (counter as u32 % 1600);
-    let mem_clk  = 1000 + (counter as u32 % 800);
-
-    vec![GpuMetrics {
-        gpu_id: "mock0".into(),
-        name: "AMD Radeon (mock)".to_string(),
-        temperature_c: Some(temp),
-        junction_temp_c: Some(junction),
-        mem_temp_c: Some(mem_temp),
-        utilization_pct: Some(util),
-        vram_used_mb: Some(used),
-        vram_total_mb: Some(total),
-        power_w: Some(90.0 + (counter % 20) as f32),
-        fan_rpm: Some(1200 + (counter as u32 % 400)),
-        core_clock_mhz: Some(core_clk),
-        mem_clock_mhz: Some(mem_clk),
-        max_core_clock_mhz: Some(3000),
-        max_mem_clock_mhz: Some(2500),
-        timestamp: Instant::now(),
-    }]
-
-}
 
 ///Running instance of gtop
 struct App {
@@ -225,25 +212,37 @@ impl App {
         }
     }
 
-///What to do every tick
-    fn on_tick(&mut self) {
-        self.metrics = vec![metrics::read_amd_sysfs("card1")];
+fn on_tick(&mut self) {
+    // 1. Get the hardware metrics first
+    let mut current_metrics = metrics::read_amd_sysfs("card1");
 
-        if let Some(gpu) = self.metrics.get(0) {
-            self.hist0.push(GpuSample {
-                t: Instant::now(),
-                util_pct: gpu.utilization_pct,
-                vram_used_mb: gpu.vram_used_mb,
-                core_mhz: gpu.core_clock_mhz,
-                mem_mhz: gpu.mem_clock_mhz,
-                temp_c: gpu.temperature_c,
-                power_w: gpu.power_w,
-            });
-        }
-
-        self.tick += 1;
+    // 2. Update or preserve the process list
+    if self.tick % 4 == 0 {
+        // Run the actual scan every ~2 seconds
+        current_metrics.processes = metrics::scan_amdgpu_processes();
+    } else if let Some(prev) = self.metrics.get(0) {
+        // Carry over the list from the last tick so the box stays full
+        current_metrics.processes = prev.processes.clone();
     }
 
+    // 3. Store the combined data
+    self.metrics = vec![current_metrics];
+
+    // 4. Push to history (clocks, power, etc.)
+    if let Some(gpu) = self.metrics.get(0) {
+        self.hist0.push(GpuSample {
+            t: Instant::now(),
+            util_pct: gpu.utilization_pct,
+            vram_used_mb: gpu.vram_used_mb,
+            core_mhz: gpu.core_clock_mhz,
+            mem_mhz: gpu.mem_clock_mhz,
+            temp_c: gpu.temperature_c,
+            power_w: gpu.power_w,
+        });
+    }
+
+    self.tick += 1;
+}
 ///If user presses q, quit, to add more commands later.
     fn on_key(&mut self, code: KeyCode) {
         match code {
@@ -342,7 +341,195 @@ let top_row = Layout::default()
     ])
     .split(inner_chunks[0]);
 
-let left_text = top_row[0];
+let left_area = top_row[0];
+
+let left_chunks = Layout::default()
+    .direction(Direction::Vertical)
+    .constraints([
+        Constraint::Length(14), // details area height (tune)
+        Constraint::Min(0),     // extras fill the rest
+    ])
+    .split(left_area);
+
+let left_details = left_chunks[0];
+let left_extras  = left_chunks[1];
+
+// ===== Extras area =====
+let extras_block = Block::default().borders(Borders::ALL).title("Extras");
+f.render_widget(extras_block.clone(), left_extras);
+let extras_inner = extras_block.inner(left_extras);
+
+let cols = Layout::default()
+    .direction(Direction::Horizontal)
+    .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
+    .split(extras_inner);
+
+let left_cards = Layout::default()
+    .direction(Direction::Vertical)
+    .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
+    .split(cols[0]);
+
+let right_cards = Layout::default()
+    .direction(Direction::Vertical)
+    .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
+    .split(cols[1]);
+
+let card_last60   = left_cards[0];
+let card_alerts   = left_cards[1];
+let card_backend  = right_cards[0];
+let card_topology = right_cards[1];
+
+let gpu0 = app.metrics.get(0);
+/////////////////////////////////////////
+
+let b = Block::default().borders(Borders::ALL).title("Last 60s (Δ)");
+f.render_widget(b.clone(), card_last60);
+let area = b.inner(card_last60);
+
+let (du, dv, dc, dm, dt, dp) = if let (Some(first), Some(last)) = (app.hist0.first(), app.hist0.last()) {
+    (
+        delta_opt_f32(first.util_pct, last.util_pct),
+        delta_opt_u32(first.vram_used_mb, last.vram_used_mb),
+        delta_opt_u32(first.core_mhz, last.core_mhz),
+        delta_opt_u32(first.mem_mhz, last.mem_mhz),
+        delta_opt_f32(first.temp_c, last.temp_c),
+        delta_opt_f32(first.power_w, last.power_w),
+    )
+} else {
+    (None, None, None, None, None, None)
+};
+
+let lines = vec![
+    Line::from(format!("Util   {}", fmt_delta_f32(du, "%"))),
+    Line::from(format!("VRAM   {}", fmt_delta_i32(dv, "MB"))),
+    Line::from(format!("Core   {}", fmt_delta_i32(dc, "MHz"))),
+    Line::from(format!("Mem    {}", fmt_delta_i32(dm, "MHz"))),
+    Line::from(format!("Temp   {}", fmt_delta_f32(dt, "°C"))),
+    Line::from(format!("Power  {}", fmt_delta_f32(dp, "W"))),
+];
+
+f.render_widget(Paragraph::new(Text::from(lines)), area);
+
+
+
+
+////////////////
+
+let b = Block::default().borders(Borders::ALL).title("Alerts");
+f.render_widget(b.clone(), card_alerts);
+let area = b.inner(card_alerts);
+
+let mut lines: Vec<Line> = vec![];
+
+if let Some(g) = gpu0 {
+    let vram_r = vram_ratio(g.vram_used_mb, g.vram_total_mb);
+
+    // Temperatures
+    if let Some(tj) = g.junction_temp_c {
+        if tj >= 105.0 {
+            lines.push(Line::from(Span::styled("! Hotspot critical", Style::default().fg(Color::Red))));
+        } else if tj >= 95.0 {
+            lines.push(Line::from(Span::styled("! Hotspot high", Style::default().fg(Color::Yellow))));
+        }
+    }
+
+    // Fan Logic
+    if let (Some(temp), Some(rpm)) = (g.temperature_c, g.fan_rpm) {
+        if temp > 75.0 && rpm == 0 {
+            lines.push(Line::from(Span::styled("! Fan Stalled / Passive", Style::default().fg(Color::Red))));
+        }
+    }
+
+    // PCIe Link Health
+     if let Some(pci) = &g.pcie_speed_gen {
+            if pci.contains("Gen 1") || pci.contains("Gen 2") {
+                lines.push(Line::from(Span::styled("! Low PCIe Bandwidth", Style::default().fg(Color::Yellow))));
+            }
+        }
+
+    // VRAM
+    if vram_r >= 0.90 {
+        lines.push(Line::from(Span::styled("! VRAM > 90%", Style::default().fg(Color::Red))));
+    } else if vram_r >= 0.80 {
+        lines.push(Line::from(Span::styled("! VRAM > 80%", Style::default().fg(Color::Yellow))));
+    }
+
+    if lines.is_empty() {
+        lines.push(Line::from(Span::styled("✓ All nominal", Style::default().fg(Color::Green))));
+    }
+} else {
+    lines.push(Line::from("--"));
+}
+
+f.render_widget(Paragraph::new(Text::from(lines)), area);
+
+
+
+
+
+//////////////////////////////////
+
+let b = Block::default().borders(Borders::ALL).title("Backend");
+f.render_widget(b.clone(), card_backend);
+let area = b.inner(card_backend);
+
+let kernel = read_trim("/proc/sys/kernel/osrelease").unwrap_or_else(|| "--".into());
+let mesa_ver = get_mesa_version();
+let lines = vec![
+    Line::from("Source: amdgpu sysfs"),
+    Line::from(format!("Kernel: {}", kernel)),
+    Line::from(format!("Mesa: {}", mesa_ver)),
+    Line::from("Tick: 500ms"),
+];
+
+f.render_widget(Paragraph::new(Text::from(lines)), area);
+
+
+/////////////////
+// ===== Topology & Link Status =====
+let b = Block::default().borders(Borders::ALL).title("Topology");
+f.render_widget(b.clone(), card_topology);
+let area = b.inner(card_topology);
+
+let lines = if let Some(gpu) = gpu0 {
+    // We'll use 'pcie_gen' instead of 'gen' to avoid the reserved keyword error
+    let pcie_str = match (&gpu.pcie_speed_gen, &gpu.pcie_width) {
+        (Some(pcie_gen), Some(width)) => format!("{} x{}", pcie_gen, width),
+        _ => "--".into(),
+    };
+
+    let gtt_str = match (gpu.gtt_used_mb, gpu.gtt_total_mb) {
+        (Some(u), Some(t)) => format!("{u} / {t} MB"),
+        _ => "--".into(),
+    };
+
+   vec![
+           Line::from(vec![
+               Span::raw("Link:    "),
+               Span::styled(pcie_str, Style::default().fg(Color::Cyan)),
+           ]),
+           Line::from(vec![
+               Span::raw("GTT:     "),
+               Span::styled(gtt_str, Style::default().fg(Color::Magenta)),
+           ]),
+           // --- ADD THIS LINE ---
+           Line::from(vec![
+               Span::raw("Voltage: "),
+               Span::styled(
+                   gpu.voltage_mv.map(|v| format!("{:.0} mV", v)).unwrap_or("--".into()),
+                   Style::default().fg(Color::Yellow),
+               ),
+           ]),
+           Line::from(format!("PCI ID:  {}", gpu.gpu_id)),
+       ]
+} else {
+    vec![Line::from("--")]
+};
+
+f.render_widget(Paragraph::new(Text::from(lines)), area);
+
+///////////////////
+
 let right_side = top_row[1];
 
 let right_chunks = Layout::default()
@@ -361,18 +548,16 @@ let right_chunks = Layout::default()
 
 
 // Text lines
-// ===== Left side: a nice "GPU details" card =====
+// ===== Left side: GPU details card =====
 let gpu0 = app.metrics.get(0);
-
-let details_block_title = "GPU 0".to_string();
 
 let details_block = Block::default()
     .borders(Borders::ALL)
-    .title(details_block_title);
+    .title("GPU 0");
 
-f.render_widget(details_block.clone(), left_text);
+f.render_widget(details_block.clone(), left_details);
 
-let details_area = details_block.inner(left_text);
+let details_area = details_block.inner(left_details);
 
 // Give the table a little padding so it doesn't hug the border
 //let details_area = details_area.inner(&Margin { vertical: 1, horizontal: 1 });
@@ -515,7 +700,8 @@ render_fixed_sparkline(f, right_chunks[2], "Core % (60s)", &core_vals);
 
 let util_stats = stats_u64(&util_vals);
 let vram_stats = stats_u64(&vram_vals);
-let core_stats = stats_u64(&core_vals);
+let core_vals = app.hist0.core_series_norm_0_100(gpu0.and_then(|g| g.max_core_clock_mhz), 3000);
+let core_stats = stats_u64(&core_vals); // Calculate stats on real data
 
 let stats_lines = vec![
     Line::from(format!(
@@ -542,6 +728,36 @@ let stats_widget = Paragraph::new(Text::from(stats_lines))
     .block(Block::default().borders(Borders::ALL).title("Stats (60s)"));
 
 f.render_widget(stats_widget, right_chunks[3]);
+
+// ===== NEW: GPU Process List =====
+let card_proc = right_chunks[4];
+let b = Block::default().borders(Borders::ALL).title("Top GPU Processes");
+f.render_widget(b.clone(), card_proc);
+let area = b.inner(card_proc);
+
+let rows: Vec<Row> = if let Some(gpu) = gpu0 {
+    // Only show the top 5 to keep it clean in that small quadrant
+    gpu.processes.iter().take(15).map(|p| {
+        Row::new(vec![
+            Cell::from(p.name.clone()),
+            Cell::from(format!("{} MB", p.vram_mb)),
+        ])
+    }).collect()
+} else {
+    vec![Row::new(vec![Cell::from("--"), Cell::from("--")])]
+};
+
+let table = Table::new(
+    rows,
+    [
+        Constraint::Min(12),   // Process Name
+        Constraint::Length(10), // VRAM usage
+    ],
+)
+.header(Row::new(vec!["Process", "VRAM"]).style(Style::default().fg(Color::Yellow)))
+.column_spacing(1);
+
+f.render_widget(table, area);
 
 
 // Clocks gauges (GPU 0)

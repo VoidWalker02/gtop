@@ -1,10 +1,12 @@
 use std::fs;
 use std::io;
+use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 use std::collections::HashMap;
 use std::sync::{Mutex, OnceLock};
 use std::process::Command;
+
 
 
 
@@ -14,6 +16,105 @@ static ID_CACHE: OnceLock<Mutex<HashMap<String, GpuIdentity>>> = OnceLock::new()
 
 fn cache() -> &'static Mutex<HashMap<String, GpuIdentity>> {
     ID_CACHE.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+pub fn get_mesa_version() -> String {
+    let output = Command::new("sh")
+        .arg("-c")
+        .arg("glxinfo | grep 'OpenGL version' | grep -o 'Mesa [0-9.]*'")
+        .output();
+
+    match output {
+        Ok(out) => {
+            let s = String::from_utf8_lossy(&out.stdout);
+            s.trim().replace("Mesa ", "") // Returns just "25.3.5"
+        }
+        Err(_) => "--".into(),
+    }
+}
+
+
+fn read_first_token(path: impl AsRef<Path>) -> Option<String> {
+    let text = fs::read_to_string(path).ok()?;
+    text.split_whitespace().next().map(|s| s.to_string())
+}
+
+#[derive(Debug, Clone)] // Add this line
+pub struct GpuProcess {
+    pub pid: u32,
+    pub name: String,
+    pub vram_mb: u64,
+}
+
+pub fn scan_amdgpu_processes() -> Vec<GpuProcess> {
+    let mut results = Vec::new();
+
+    // Iterate through all PIDs in /proc
+    if let Ok(entries) = fs::read_dir("/proc") {
+        for entry in entries.flatten() {
+            let pid_str = entry.file_name();
+            // Only process directories that are numeric PIDs
+            let pid = match pid_str.to_str().and_then(|s| s.parse::<u32>().ok()) {
+                Some(p) => p,
+                None => continue,
+            };
+
+            let fdinfo_path = format!("/proc/{}/fdinfo", pid);
+            if let Ok(fds) = fs::read_dir(fdinfo_path) {
+                for fd in fds.flatten() {
+                    // Open the fdinfo file to check for GPU usage
+                    if let Ok(file) = fs::File::open(fd.path()) {
+                        let reader = BufReader::new(file);
+                        let mut is_amdgpu = false;
+                        let mut vram_bytes: u64 = 0;
+
+                        for line in reader.lines().flatten() {
+                            // Check for the driver identifier
+                            if line.contains("drm-driver:") && line.contains("amdgpu") {
+                                is_amdgpu = true;
+                            }
+
+                            // Extract VRAM usage which is typically in KiB
+                            if line.contains("drm-memory-vram:") {
+                                let parts: Vec<&str> = line.split_whitespace().collect();
+                                // parts[0] is label, parts[1] is the value
+                                if let Some(val_str) = parts.get(1) {
+                                    if let Ok(val) = val_str.parse::<u64>() {
+                                        // If the kernel provides "KiB" unit, convert to bytes
+                                        vram_bytes = if parts.get(2) == Some(&"KiB") {
+                                            val * 1024
+                                        } else {
+                                            val
+                                        };
+                                    }
+                                }
+                            }
+                        }
+
+                        // If this process owns an amdgpu context and uses VRAM, record it
+                        if is_amdgpu && vram_bytes > 0 {
+                            let name = fs::read_to_string(format!("/proc/{}/comm", pid))
+                                .unwrap_or_else(|_| "unknown".into())
+                                .trim()
+                                .to_string();
+
+                            results.push(GpuProcess {
+                                pid,
+                                name,
+                                vram_mb: vram_bytes / 1024 / 1024,
+                            });
+                            // One GPU file descriptor is enough to identify the process
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Sort descending by VRAM usage so top consumers appear first
+    results.sort_by(|a, b| b.vram_mb.cmp(&a.vram_mb));
+    results
 }
 
 
@@ -39,7 +140,19 @@ pub struct GpuMetrics {
     pub max_core_clock_mhz: Option<u32>,
     pub max_mem_clock_mhz: Option<u32>,
 
+    pub pcie_speed_gen: Option<String>, // Changed to String for the "Gen X" text
+    pub pcie_width: Option<u32>,
+    pub gtt_used_mb: Option<u64>,
+    pub gtt_total_mb: Option<u64>,
+
+    pub voltage_mv: Option<f32>,
+
+    pub processes: Vec<GpuProcess>, // Add this line
+
     pub timestamp: Instant,
+
+
+
 }
 
 #[derive(Debug, Clone)]
@@ -273,6 +386,8 @@ fn parse_pp_dpm_current_and_max_mhz(path: impl AsRef<Path>) -> (Option<u32>, Opt
     (current, maxv)
 }
 
+
+
 /* ------------------------- public entry point ------------------------- */
 
 
@@ -320,7 +435,33 @@ pub fn read_amd_sysfs(card: &str) -> GpuMetrics {
        fan_rpm = read_u32(hw.join("fan1_input")); // may still be None if not exposed
    }
 
+    // 1. Read the raw speed (e.g., "16.0") and width (e.g., "16")
+    let raw_speed = read_first_token(dev.join("current_link_speed"))
+        .and_then(|s| s.parse::<f32>().ok());
 
+    let pcie_width = read_first_token(dev.join("current_link_width"))
+        .and_then(|s| s.parse::<u32>().ok());
+
+    let pcie_speed_gen = raw_speed.map(|speed| {
+        if speed > 16.0      { "Gen 5".into() }
+        else if speed > 8.0  { "Gen 4".into() }
+        else if speed > 5.0  { "Gen 3".into() }
+        else if speed > 2.5  { "Gen 2".into() }
+        else                 { "Gen 1".into() }
+});
+
+    // 3. Read GTT stats
+    let gtt_used_mb = read_u64(dev.join("mem_info_gtt_used")).map(|b| b / 1024 / 1024);
+    let gtt_total_mb = read_u64(dev.join("mem_info_gtt_total")).map(|b| b / 1024 / 1024);
+
+    //Read voltage
+    let voltage_mv = if let Some(hw) = find_hwmon_dir(card) {
+        read_f32(hw.join("in0_input")) // Returns mV
+    } else {
+        None
+    };
+
+    let processes = scan_amdgpu_processes(); // Or start with vec![] if scanner isn't ready
     // clocks
     let (core_clock_mhz, max_core_clock_mhz) = parse_pp_dpm_current_and_max_mhz(dev.join("pp_dpm_sclk"));
     let (mem_clock_mhz,  max_mem_clock_mhz)  = parse_pp_dpm_current_and_max_mhz(dev.join("pp_dpm_mclk"));
@@ -345,6 +486,15 @@ pub fn read_amd_sysfs(card: &str) -> GpuMetrics {
         mem_clock_mhz,
         max_core_clock_mhz,
         max_mem_clock_mhz,
+
+        pcie_speed_gen, // matches the struct field name
+        pcie_width,
+        gtt_used_mb,
+        gtt_total_mb,
+
+        voltage_mv,
+
+        processes,
 
         timestamp: Instant::now(),
     }

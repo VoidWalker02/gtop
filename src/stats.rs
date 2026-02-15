@@ -73,17 +73,25 @@ impl GpuHistory {
     }
 
     /// Core clock normalized to 0..=100 given max_mhz.
+// In stats.rs
     pub fn core_series_norm_0_100(&self, max_mhz: Option<u32>, fallback_max: u32) -> Vec<u64> {
-        let maxv = max_mhz.unwrap_or(fallback_max) as u64;
-        if maxv == 0 {
-            return vec![0; self.samples.len()];
-        }
+        // Force the denominator to match your gauge's 3000 MHz for visual parity
+        let maxv = 3000;
 
         self.samples
             .iter()
             .map(|s| ratio_to_100(s.core_mhz.unwrap_or(0) as u64, maxv))
             .collect()
     }
+
+    pub fn first(&self) -> Option<&GpuSample> {
+        self.samples.front()
+    }
+
+    pub fn last(&self) -> Option<&GpuSample> {
+        self.samples.back()
+    }
+
 
     /// Memory clock normalized to 0..=100 given max_mhz.
     pub fn mem_series_norm_0_100(&self, max_mhz: Option<u32>, fallback_max: u32) -> Vec<u64> {
@@ -137,8 +145,11 @@ pub fn stats_u64(vals: &[u64]) -> Option<(u64, u64, u64)> {
     }
     let min = *vals.iter().min()?;
     let max = *vals.iter().max()?;
+
+    // Use f64 for the average to prevent integer division truncation/skewing
     let sum: u64 = vals.iter().sum();
-    let avg = sum / (vals.len() as u64);
+    let avg = (sum as f64 / vals.len() as f64).round() as u64;
+
     Some((min, avg, max))
 }
 
