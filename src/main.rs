@@ -56,7 +56,7 @@ fn fmt_delta_i32(v: Option<i32>, unit: &str) -> String {
 }
 
 
-/// Formats VRAM usage nicely.
+///Formats the value of VRAM into something we can display.
 fn fmt_vram(used: Option<u32>, total: Option<u32>) -> String {
     match (used, total) {
         (Some(u), Some(t)) => format!("{u} / {t} MB"),
@@ -79,7 +79,6 @@ fn pct_ratio(pct: Option<f32>) -> f64 {
 }
 
 /// Convert MHz values into a ratio based on a fixed maximum.
-/// The max is a placeholder for now and will later come from real GPU data.
 fn mhz_ratio(mhz: Option<u32>, max_mhz: u32) -> f64 {
     match mhz {
         Some(m) if max_mhz > 0 => ((m as f64) / (max_mhz as f64)).clamp(0.0, 1.0),
@@ -87,6 +86,8 @@ fn mhz_ratio(mhz: Option<u32>, max_mhz: u32) -> f64 {
     }
 }
 
+///Reads the contents of the file provided in argument and returns its
+///trimmed contents.
 fn read_trim(path: &str) -> Option<String> {
     std::fs::read_to_string(path).ok().map(|s| s.trim().to_string())
 }
@@ -94,7 +95,6 @@ fn read_trim(path: &str) -> Option<String> {
 
 /// Shared gauge coloring logic.
 /// Red means “probably bad”, yellow is warning, green is normal.
-/// This works well for utilization and VRAM usage.
 fn gauge_style(r: f64) -> Style {
     if r >= 0.90 {
         Style::default().fg(Color::Red)
@@ -146,6 +146,8 @@ fn mem_temp_style(temp_c: Option<f32>) -> Style {
     }
 }
 
+///Introduces a 100 into the sparklines so that it properly
+///Displays activity from a ratio of 0-100
 fn anchored_100(series: &[u64]) -> Vec<u64> {
     let mut v = Vec::with_capacity(series.len() + 1);
     v.push(100);           // anchor forces max(data)=100
@@ -153,6 +155,7 @@ fn anchored_100(series: &[u64]) -> Vec<u64> {
     v
 }
 
+///Setting up the sparkline graphs
 fn render_fixed_sparkline(
     f: &mut ratatui::Frame,
     area: ratatui::layout::Rect,
@@ -180,6 +183,7 @@ fn render_fixed_sparkline(
     f.render_widget(Clear, cols[0]);
 }
 
+///Format the GPU name, so we don't get a massive String.
 fn pretty_gpu_name(raw: &str) -> String {
     if let Some(idx) = raw.find("Radeon") {
         raw[idx..].to_string()
@@ -192,16 +196,34 @@ fn pretty_gpu_name(raw: &str) -> String {
 
 
 
-///Running instance of gtop
+/// Central application state for the gtop TUI.
+///
+/// `App` owns all runtime state required by the UI layer,
+/// including sampled GPU metrics and historical data used
+/// for rendering graphs and statistics.
+///
+/// This struct is mutated on each tick of the event loop.
 struct App {
+    ///Whether the application should continue running, set to false if user quits
     running: bool,
+    ///Tick counter incremented every time data is harvested and UI refreshes.
     tick: u64,
+    ///Latest sampled metrics for the detected GPU
     metrics: Vec<GpuMetrics>,
+    ///Last 60 seconds of recorded history of relevant metrics.
     hist0: GpuHistory,
 }
 
 
-///"""constructor""" for the gtop application
+/// Creates a new `App` with default runtime state.
+    ///
+    /// The application starts in a running state with:
+    /// - `tick` initialized to `0`
+    /// - no sampled GPU metrics
+    /// - a history buffer sized for 120 samples
+    ///
+    /// The history capacity determines how many past
+    /// data points are retained for graph rendering.
 impl App {
     fn new() -> Self {
         Self {
@@ -212,13 +234,16 @@ impl App {
         }
     }
 
+///This is the logic that runs on every UI refresh, the bread and butter of the frontend
 fn on_tick(&mut self) {
     // 1. Get the hardware metrics first
+    //mutable as it changes every tick
     let mut current_metrics = metrics::read_amd_sysfs("card1");
 
     // 2. Update or preserve the process list
     if self.tick % 4 == 0 {
         // Run the actual scan every ~2 seconds
+        //grab list of processes using most amount of VRAM
         current_metrics.processes = metrics::scan_amdgpu_processes();
     } else if let Some(prev) = self.metrics.get(0) {
         // Carry over the list from the last tick so the box stays full
@@ -252,7 +277,22 @@ fn on_tick(&mut self) {
     }
 }
 
-///This is the general loop of the application
+
+/// Entry point for the gtop TUI
+///
+/// This function:
+/// - Enables raw terminal mode
+/// - Switches to the alternate screen buffer
+/// - Initializes the Crossterm backend
+/// - Runs the main application loop
+/// - Restores terminal state on exit
+///
+/// Any error produced by the application loop
+/// is propagated to the caller.
+///
+/// Terminal state is restored before returning,
+/// even if the application loop fails.
+
 fn main() -> io::Result<()> {
     enable_raw_mode()?;
     let mut stdout = io::stdout();
@@ -269,8 +309,19 @@ fn main() -> io::Result<()> {
     res
 }
 
-///Core gtop loop, meat and potatoes of the application
-fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> io::Result<()> {
+/// Runs the main gtop event loop.
+///
+/// This function drives the application lifecycle
+/// - Rendering the UI each frame
+/// - Checking for keyboard input
+/// - Advancing the application state on ticks
+///
+/// The loop continues until `app.running` becomes `false`.
+///
+/// A tick occurs whenever no input event is received within
+/// `tick_rate`. Ticks are used to trigger metric sampling
+/// and update history
+fn run_app<B: ratatui::backend::Backend>(terminal: &mut Terminal<B>) -> io::Result<()> {
     let mut app = App::new();
     let tick_rate = Duration::from_millis(500);
 
@@ -296,7 +347,9 @@ fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> io::Result<
     Ok(())
 }
 
-///Rendering and setting up the file
+///UI renders the entire text interface for gtop
+///It is broken down into the specific blocks of the TUI
+///and the information each block contains
 fn ui(f: &mut ratatui::Frame, app: &App) {
     let size = f.size();
 
@@ -487,7 +540,7 @@ f.render_widget(Paragraph::new(Text::from(lines)), area);
 
 /////////////////
 // ===== Topology & Link Status =====
-let b = Block::default().borders(Borders::ALL).title("Topology");
+let b = Block::default().borders(Borders::ALL).title("Interface");
 f.render_widget(b.clone(), card_topology);
 let area = b.inner(card_topology);
 
@@ -691,17 +744,16 @@ let util_gauge = Gauge::default()
 
 let util_vals = app.hist0.util_series_pct_u64();
 let vram_vals = app.hist0.vram_series_norm_0_100(gpu0.and_then(|g| g.vram_total_mb));
-let core_vals = app.hist0.core_series_norm_0_100(gpu0.and_then(|g| g.max_core_clock_mhz), 3000);
+let core_vals_history = app.hist0.core_series_norm_0_100(gpu0.and_then(|g| g.max_core_clock_mhz), 3000);
 
 render_fixed_sparkline(f, right_chunks[0], "Util % (60s)", &util_vals);
 render_fixed_sparkline(f, right_chunks[1], "VRAM % (60s)", &vram_vals);
-render_fixed_sparkline(f, right_chunks[2], "Core % (60s)", &core_vals);
+render_fixed_sparkline(f, right_chunks[2], "Core % (60s)", &core_vals_history);
 
 
 let util_stats = stats_u64(&util_vals);
 let vram_stats = stats_u64(&vram_vals);
-let core_vals = app.hist0.core_series_norm_0_100(gpu0.and_then(|g| g.max_core_clock_mhz), 3000);
-let core_stats = stats_u64(&core_vals); // Calculate stats on real data
+let core_stats = stats_u64(&core_vals_history); // Calculate stats on real data
 
 let stats_lines = vec![
     Line::from(format!(
@@ -736,25 +788,29 @@ f.render_widget(b.clone(), card_proc);
 let area = b.inner(card_proc);
 
 let rows: Vec<Row> = if let Some(gpu) = gpu0 {
-    // Only show the top 5 to keep it clean in that small quadrant
     gpu.processes.iter().take(15).map(|p| {
         Row::new(vec![
+            Cell::from(p.pid.to_string()).style(Style::default().fg(Color::DarkGray)), // New PID cell
             Cell::from(p.name.clone()),
             Cell::from(format!("{} MB", p.vram_mb)),
         ])
     }).collect()
 } else {
-    vec![Row::new(vec![Cell::from("--"), Cell::from("--")])]
+    vec![Row::new(vec![Cell::from("--"), Cell::from("--"), Cell::from("--")])]
 };
 
 let table = Table::new(
     rows,
     [
-        Constraint::Min(12),   // Process Name
-        Constraint::Length(10), // VRAM usage
+        Constraint::Length(6),  // PID
+        Constraint::Min(10),    // Name
+        Constraint::Length(10), // VRAM
     ],
 )
-.header(Row::new(vec!["Process", "VRAM"]).style(Style::default().fg(Color::Yellow)))
+.header(
+    Row::new(vec!["PID", "Process", "VRAM"])
+        .style(Style::default().fg(Color::Yellow))
+)
 .column_spacing(1);
 
 f.render_widget(table, area);
