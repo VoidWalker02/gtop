@@ -6,12 +6,14 @@ use std::time::Instant;
 use std::collections::HashMap;
 use std::sync::{Mutex, OnceLock};
 use std::process::Command;
+use serde::Serialize;
+
 
 
 
 
 // Global cache for GPU identities.
-// We only want to run udevadm once per GPU PCI slot, only need the data once
+// We only want to run udevadm once per GPU PCI slot, as we only need the data once
 static ID_CACHE: OnceLock<Mutex<HashMap<String, GpuIdentity>>> = OnceLock::new();
 
 fn cache() -> &'static Mutex<HashMap<String, GpuIdentity>> {
@@ -39,7 +41,7 @@ fn read_first_token(path: impl AsRef<Path>) -> Option<String> {
     text.split_whitespace().next().map(|s| s.to_string())
 }
 
-#[derive(Debug, Clone)] // Add this line
+#[derive(Debug, Serialize, Clone)] 
 pub struct GpuProcess {
     pub pid: u32,
     pub name: String,
@@ -118,7 +120,7 @@ pub fn scan_amdgpu_processes() -> Vec<GpuProcess> {
 }
 
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Serialize, Clone)]
 pub struct GpuMetrics {
     pub gpu_id: String, // GPU PCI slot can act as an ID
     pub name: String, //commercial gpu name
@@ -149,6 +151,7 @@ pub struct GpuMetrics {
 
     pub processes: Vec<GpuProcess>, // Add this line
 
+    #[serde(skip)]
     pub timestamp: Instant,
 
 

@@ -7,7 +7,10 @@ use metrics::{GpuMetrics, get_mesa_version};
 mod stats;
 use stats::{GpuHistory, GpuSample, stats_u64};
 use std::collections::VecDeque;
-
+use std::fs::{File,OpenOptions};
+use std::io::Write;
+use clap::Parser;
+use serde::Serialize;
 
 
 // Crossterm handles terminal input and raw mode.
@@ -193,8 +196,11 @@ fn pretty_gpu_name(raw: &str) -> String {
     }
 }
 
-
-
+#[derive(Parser)]
+struct Args{
+    #[arg(short, long)]
+    log: Option<String>,
+}
 
 /// Central application state for the gtop TUI.
 ///
@@ -212,6 +218,8 @@ struct App {
     metrics: Vec<GpuMetrics>,
     ///Last 60 seconds of recorded history of relevant metrics.
     hist0: GpuHistory,
+    ///Filepath for logging data. 
+    log_file: Option<File>
 }
 
 
@@ -224,15 +232,27 @@ struct App {
     ///
     /// The history capacity determines how many past
     /// data points are retained for graph rendering.
+    
 impl App {
-    fn new() -> Self {
+    fn new(log_path: Option<String>) -> Self {
+        let log_file = log_path.and_then(|path| {
+            OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(path)
+                .ok()
+        });
+
         Self {
             running: true,
             tick: 0,
             metrics: vec![],
-            hist0: GpuHistory::new(120)
+            hist0: GpuHistory::new(120),
+            log_file,
         }
     }
+
+
 
 ///This is the logic that runs on every UI refresh, the bread and butter of the frontend
 fn on_tick(&mut self) {
@@ -251,7 +271,7 @@ fn on_tick(&mut self) {
     }
 
     // 3. Store the combined data
-    self.metrics = vec![current_metrics];
+    self.metrics = vec![current_metrics.clone()];
 
     // 4. Push to history (clocks, power, etc.)
     if let Some(gpu) = self.metrics.get(0) {
@@ -264,6 +284,14 @@ fn on_tick(&mut self) {
             temp_c: gpu.temperature_c,
             power_w: gpu.power_w,
         });
+    }
+
+
+
+    if let Some(ref mut file) = self.log_file {
+        if let Ok(json) = serde_json::to_string(&current_metrics) {
+            let _ = writeln!(file, "{}", json);
+        }
     }
 
     self.tick += 1;
@@ -292,15 +320,17 @@ fn on_tick(&mut self) {
 ///
 /// Terminal state is restored before returning,
 /// even if the application loop fails.
-
 fn main() -> io::Result<()> {
+    let args = Args::parse(); // 1. Parse args here
+    
     enable_raw_mode()?;
     let mut stdout = io::stdout();
     execute!(stdout, EnterAlternateScreen)?;
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
 
-    let res = run_app(&mut terminal);
+    // 2. Pass the log path into run_app
+    let res = run_app(&mut terminal, args.log);
 
     disable_raw_mode()?;
     execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
@@ -308,6 +338,7 @@ fn main() -> io::Result<()> {
 
     res
 }
+
 
 /// Runs the main gtop event loop.
 ///
@@ -321,17 +352,21 @@ fn main() -> io::Result<()> {
 /// A tick occurs whenever no input event is received within
 /// `tick_rate`. Ticks are used to trigger metric sampling
 /// and update history
-fn run_app<B: ratatui::backend::Backend>(terminal: &mut Terminal<B>) -> io::Result<()> {
-    let mut app = App::new();
+
+
+fn run_app<B: ratatui::backend::Backend>(
+    terminal: &mut Terminal<B>, 
+    log_path: Option<String> // 3. Accept the path here
+) -> io::Result<()> {
+    // 4. Initialize App with the path
+    let mut app = App::new(log_path);
     let tick_rate = Duration::from_millis(500);
 
-    // Force first tick so UI isn’t empty
     app.on_tick();
 
     while app.running {
         terminal.draw(|f| ui(f, &app))?;
 
-        // Handle Input
         if event::poll(tick_rate)? {
             if let Event::Key(key) = event::read()? {
                 if key.kind == KeyEventKind::Press {
@@ -339,13 +374,15 @@ fn run_app<B: ratatui::backend::Backend>(terminal: &mut Terminal<B>) -> io::Resu
                 }
             }
         } else {
-            // Timeout hit => "tick"
             app.on_tick();
         }
     }
 
     Ok(())
 }
+
+
+
 
 ///UI renders the entire text interface for gtop
 ///It is broken down into the specific blocks of the TUI
@@ -358,9 +395,10 @@ fn ui(f: &mut ratatui::Frame, app: &App) {
         .constraints([Constraint::Length(3), Constraint::Min(0), Constraint::Length(3)])
         .split(size);
 ///top header text
-    let header_text = format!(
-        "gtop — AMD sysfs backend —— q to quit",
-    );
+    
+    
+    let logging_status = if app.log_file.is_some() { "LOGGING ON" } else { "LOGGING OFF" };
+    let header_text = format!("gtop — {} — q to quit", logging_status);
 
     let header = Paragraph::new(header_text)
         .block(Block::default().borders(Borders::ALL).title("Header"));

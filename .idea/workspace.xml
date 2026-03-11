@@ -12,9 +12,9 @@
   </component>
   <component name="ChangeListManager">
     <list default="true" id="071bdacf-c81d-422c-a5be-1c381cad1544" name="Changes" comment="">
-      <change beforePath="$PROJECT_DIR$/.idea/gtop.iml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/gtop.iml" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/src/main.rs" beforeDir="false" afterPath="$PROJECT_DIR$/src/main.rs" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/metrics.rs" beforeDir="false" afterPath="$PROJECT_DIR$/src/metrics.rs" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
@@ -43,7 +43,7 @@
     "RunOnceActivity.TerminalTabsStorage.copyFrom.TerminalArrangementManager.252": "true",
     "RunOnceActivity.git.unshallow": "true",
     "RunOnceActivity.typescript.service.memoryLimit.init": "true",
-    "git-widget-placeholder": "comments",
+    "git-widget-placeholder": "log",
     "kotlin-language-version-configured": "true",
     "last_opened_file_path": "/home/isaacm/Documents/Assignments/405/GameOfCells-v2.0",
     "nodejs_package_manager_path": "npm",
