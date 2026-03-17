@@ -1,3 +1,7 @@
+/// Metrics is the backend of gtop
+///It interfaces with sysfs, a virtual filesystem in Linux
+///that exposes information about Kernel subsystems, reading
+///Files to harvest data regarding the GPU.
 use std::fs;
 use std::io;
 use std::io::{BufRead, BufReader};
@@ -35,12 +39,14 @@ pub fn get_mesa_version() -> String {
     }
 }
 
-
+//Sysfs exposes files as strings, usually we are only interested in
+//The first token of the file, the number.
 fn read_first_token(path: impl AsRef<Path>) -> Option<String> {
     let text = fs::read_to_string(path).ok()?;
     text.split_whitespace().next().map(|s| s.to_string())
 }
 
+//Small struct intended to hold data about a running Linux process.
 #[derive(Debug, Serialize, Clone)] 
 pub struct GpuProcess {
     pub pid: u32,
@@ -48,6 +54,7 @@ pub struct GpuProcess {
     pub vram_mb: u64,
 }
 
+//Scan through all the current processes and gather data on each of them.
 pub fn scan_amdgpu_processes() -> Vec<GpuProcess> {
     let mut results = Vec::new();
 
@@ -120,6 +127,9 @@ pub fn scan_amdgpu_processes() -> Vec<GpuProcess> {
 }
 
 
+///GpuMetrics is the most important struct in the entire codebase.
+///It holds all the relevant GPU information and much of it is 
+///updated on every tick. 
 #[derive(Debug, Serialize, Clone)]
 pub struct GpuMetrics {
     pub gpu_id: String, // GPU PCI slot can act as an ID
@@ -142,14 +152,14 @@ pub struct GpuMetrics {
     pub max_core_clock_mhz: Option<u32>,
     pub max_mem_clock_mhz: Option<u32>,
 
-    pub pcie_speed_gen: Option<String>, // Changed to String for the "Gen X" text
+    pub pcie_speed_gen: Option<String>, 
     pub pcie_width: Option<u32>,
     pub gtt_used_mb: Option<u64>,
     pub gtt_total_mb: Option<u64>,
 
     pub voltage_mv: Option<f32>,
 
-    pub processes: Vec<GpuProcess>, // Add this line
+    pub processes: Vec<GpuProcess>, 
 
     #[serde(skip)]
     pub timestamp: Instant,
@@ -195,10 +205,13 @@ fn device_dir(card: &str) -> PathBuf {
     PathBuf::from(format!("/sys/class/drm/{card}/device"))
 }
 
+//Locate the directory on Linux Hardware Monitor corresponding
+//to the current GPU (could in theory support multiple GPUs, as hwmon
+//keeps them as card0, card1, etc)
 fn find_hwmon_dir(card: &str) -> Option<PathBuf> {
     let base = device_dir(card).join("hwmon");
 
-    // Collect once (no iterator cloning needed)
+    // Collect once 
     let mut dirs: Vec<PathBuf> = fs::read_dir(&base).ok()?
         .filter_map(|e| e.ok())
         .map(|e| e.path())
@@ -391,7 +404,7 @@ fn parse_pp_dpm_current_and_max_mhz(path: impl AsRef<Path>) -> (Option<u32>, Opt
 
 
 
-/* ------------------------- public entry point ------------------------- */
+/* ---------------------------------------------------------------------------------- */
 
 
 
@@ -399,7 +412,6 @@ fn parse_pp_dpm_current_and_max_mhz(path: impl AsRef<Path>) -> (Option<u32>, Opt
 
 
 /// Read metrics for one AMD GPU card (ex: "card1") using sysfs/hwmon.
-/// No rocm-smi parsing, no JSON.
 pub fn read_amd_sysfs(card: &str) -> GpuMetrics {
     let dev = device_dir(card);
 
@@ -430,7 +442,7 @@ pub fn read_amd_sysfs(card: &str) -> GpuMetrics {
     // temps
     let (temperature_c, junction_temp_c, mem_temp_c) = read_hwmon_temps(card);
 
-    // power (µW -> W) and fan (may not exist)
+    // power (µW -> W) and fan
     let mut power_w = None;
     let mut fan_rpm = None;
    if let Some(hw) = find_hwmon_dir(card) {

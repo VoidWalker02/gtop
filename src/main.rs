@@ -387,6 +387,13 @@ fn run_app<B: ratatui::backend::Backend>(
 ///UI renders the entire text interface for gtop
 ///It is broken down into the specific blocks of the TUI
 ///and the information each block contains
+///
+
+/**
+ *This method loads the entire text interface for gtop, setting it up
+ * With the formatted data using the other methods in this file.
+ * The TUI is broken down into individual blocks that display specific information.
+ */
 fn ui(f: &mut ratatui::Frame, app: &App) {
     let size = f.size();
 
@@ -437,7 +444,7 @@ let left_area = top_row[0];
 let left_chunks = Layout::default()
     .direction(Direction::Vertical)
     .constraints([
-        Constraint::Length(14), // details area height (tune)
+        Constraint::Length(14), // details area height 
         Constraint::Min(0),     // extras fill the rest
     ])
     .split(left_area);

@@ -1,7 +1,10 @@
-// src/stats.rs
+///This file contains methods for the manipulation of data taken from
+///GPUMetrics for the purpose of extracting statistics from them.
 use std::collections::VecDeque;
 use std::time::Instant;
 
+///The varying data we actually want to do statistics with
+///Bundled into a struct.
 #[derive(Debug, Clone, Copy)]
 pub struct GpuSample {
     pub t: Instant,
@@ -13,12 +16,16 @@ pub struct GpuSample {
     pub power_w: Option<f32>,
 }
 
+//Deque of GpuSamples, allows us to project trends and calculate statistics
+//Across a span of time.
 pub struct GpuHistory {
     cap: usize,
     samples: VecDeque<GpuSample>,
 }
 
+
 impl GpuHistory {
+    ///Creates a cap for the deque, right now hardcoded as 120 (60 seconds of data)
     pub fn new(cap: usize) -> Self {
         Self {
             cap,
@@ -45,7 +52,7 @@ impl GpuHistory {
         self.samples.iter()
     }
 
-    // -------- series helpers (ready for ratatui::Sparkline) --------
+    // -------- series helpers (for ratatui::Sparkline) --------
 
     /// Utilization series in 0..=100.
     pub fn util_series_pct_u64(&self) -> Vec<u64> {
@@ -73,9 +80,8 @@ impl GpuHistory {
     }
 
     /// Core clock normalized to 0..=100 given max_mhz.
-// In stats.rs
     pub fn core_series_norm_0_100(&self, max_mhz: Option<u32>, fallback_max: u32) -> Vec<u64> {
-        // Force the denominator to match your gauge's 3000 MHz for visual parity
+        // Force the denominator to match the gauge's 3000 MHz for visual parity
         let maxv = 3000;
 
         self.samples
@@ -146,17 +152,11 @@ pub fn stats_u64(vals: &[u64]) -> Option<(u64, u64, u64)> {
     let min = *vals.iter().min()?;
     let max = *vals.iter().max()?;
 
-    // Use f64 for the average to prevent integer division truncation/skewing
+    // Use f64 for the average to prevent integer division truncation
     let sum: u64 = vals.iter().sum();
     let avg = (sum as f64 / vals.len() as f64).round() as u64;
 
     Some((min, avg, max))
 }
 
-pub fn series_to_points(vals: &[u64]) -> Vec<(f64, f64)> {
-    vals.iter()
-        .enumerate()
-        .map(|(i, v)| (i as f64, *v as f64))
-        .collect()
-}
 
