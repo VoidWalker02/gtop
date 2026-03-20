@@ -200,6 +200,9 @@ fn pretty_gpu_name(raw: &str) -> String {
 struct Args{
     #[arg(short, long)]
     log: Option<String>,
+
+    #[arg(short,long,default_value = "card1")] 
+    card: String,
 }
 
 /// Central application state for the gtop TUI.
@@ -219,7 +222,9 @@ struct App {
     ///Last 60 seconds of recorded history of relevant metrics.
     hist0: GpuHistory,
     ///Filepath for logging data. 
-    log_file: Option<File>
+    log_file: Option<File>,
+    ///Name of the card we are accessing
+    selected_card: String,
 }
 
 
@@ -234,7 +239,7 @@ struct App {
     /// data points are retained for graph rendering.
     
 impl App {
-    fn new(log_path: Option<String>) -> Self {
+    fn new(log_path: Option<String>, card_name: String) -> Self {
         let log_file = log_path.and_then(|path| {
             OpenOptions::new()
                 .create(true)
@@ -249,6 +254,7 @@ impl App {
             metrics: vec![],
             hist0: GpuHistory::new(120),
             log_file,
+            selected_card: card_name,
         }
     }
 
@@ -258,7 +264,7 @@ impl App {
 fn on_tick(&mut self) {
     // 1. Get the hardware metrics first
     //mutable as it changes every tick
-    let mut current_metrics = metrics::read_amd_sysfs("card1");
+    let mut current_metrics = metrics::read_amd_sysfs(&self.selected_card);
 
     // 2. Update or preserve the process list
     if self.tick % 4 == 0 {
@@ -330,7 +336,7 @@ fn main() -> io::Result<()> {
     let mut terminal = Terminal::new(backend)?;
 
     // 2. Pass the log path into run_app
-    let res = run_app(&mut terminal, args.log);
+    let res = run_app(&mut terminal, args.log, args.card);
 
     disable_raw_mode()?;
     execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
@@ -356,10 +362,11 @@ fn main() -> io::Result<()> {
 
 fn run_app<B: ratatui::backend::Backend>(
     terminal: &mut Terminal<B>, 
-    log_path: Option<String> // 3. Accept the path here
+    log_path: Option<String>,
+    card_name: String
 ) -> io::Result<()> {
     // 4. Initialize App with the path
-    let mut app = App::new(log_path);
+    let mut app = App::new(log_path, card_name);
     let tick_rate = Duration::from_millis(500);
 
     app.on_tick();
@@ -405,7 +412,7 @@ fn ui(f: &mut ratatui::Frame, app: &App) {
     
     
     let logging_status = if app.log_file.is_some() { "LOGGING ON" } else { "LOGGING OFF" };
-    let header_text = format!("gtop — {} — q to quit", logging_status);
+    let header_text = format!("gtop — {} — {} —q to quit", logging_status, app.selected_card);
 
     let header = Paragraph::new(header_text)
         .block(Block::default().borders(Borders::ALL).title("Header"));
